@@ -1,0 +1,919 @@
+{
+  "name": "ZSFL_GST_Invoice",
+  "schemaDescription": "Custom schema for Indian GST tax invoices addressed to Sundram Fasteners Limited. All fields are custom and require annotation and model training before extraction.",
+  "documentType": "custom",
+  "documentTypeDescription": "",
+  "id": "401526d4-bea5-4c77-8016-f31b6f3c97b0",
+  "predefined": false,
+  "version": "1",
+  "created": "2026-09-22T14:23:21.920511+00:00",
+  "updated": "",
+  "state": "active",
+  "settings": "",
+  "predefinedCategories": [],
+  "categories": [],
+  "headerFields": [
+    {
+      "name": "invoiceNumber",
+      "description": "Tax invoice number",
+      "label": "Invoice Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 1,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "invoiceDate",
+      "description": "Invoice date",
+      "label": "Invoice Date",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 2,
+        "modelArtifactId": []
+      },
+      "formattingType": "date",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "dueDate",
+      "description": "Payment due date",
+      "label": "Due Date",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 3,
+        "modelArtifactId": []
+      },
+      "formattingType": "date",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "purchaseOrderNumber",
+      "description": "Buyer PO / OA reference",
+      "label": "Purchase Order Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 4,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "supplierName",
+      "description": "Supplier / seller company name",
+      "label": "Supplier Name",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 5,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "supplierAddress",
+      "description": "Supplier / seller address",
+      "label": "Supplier Address",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 6,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "supplierGSTIN",
+      "description": "Supplier GST registration number",
+      "label": "Supplier GSTIN",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 7,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "buyerName",
+      "description": "Buyer / bill-to company name",
+      "label": "Buyer Name",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 8,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "buyerAddress",
+      "description": "Buyer / bill-to address",
+      "label": "Buyer Address",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 9,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "buyerGSTIN",
+      "description": "Buyer GST registration number",
+      "label": "Buyer GSTIN",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 10,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "consigneeName",
+      "description": "Consignee / ship-to name",
+      "label": "Consignee Name",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 11,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "consigneeAddress",
+      "description": "Consignee / ship-to address",
+      "label": "Consignee Address",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 12,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "consigneeGSTIN",
+      "description": "Consignee GST registration number",
+      "label": "Consignee GSTIN",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 13,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "taxableAmount",
+      "description": "Total taxable / assessable value before tax",
+      "label": "Taxable Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 14,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "cgstAmount",
+      "description": "Total Central GST amount",
+      "label": "CGST Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 15,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "sgstAmount",
+      "description": "Total State GST amount",
+      "label": "SGST Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 16,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "igstAmount",
+      "description": "Total Integrated GST amount",
+      "label": "IGST Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 17,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "totalTaxAmount",
+      "description": "Total tax amount (CGST + SGST + IGST)",
+      "label": "Total Tax Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 18,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "totalInvoiceValue",
+      "description": "Total invoice value including tax",
+      "label": "Total Invoice Value",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 19,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "totalInvoiceValueInWords",
+      "description": "Total invoice value in words",
+      "label": "Total Invoice Value In Words",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 20,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "currencyCode",
+      "description": "Currency code (INR)",
+      "label": "Currency Code",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 21,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "paymentTerms",
+      "description": "Payment terms",
+      "label": "Payment Terms",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 22,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "supplierBankAccount",
+      "description": "Supplier bank account number",
+      "label": "Supplier Bank Account",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 23,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "deliveryNumber",
+      "description": "Delivery note / delivery number",
+      "label": "Delivery Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 24,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "salesOrderNumber",
+      "description": "Supplier sales order / OA number",
+      "label": "Sales Order Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 25,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "billingDocumentNumber",
+      "description": "Supplier billing document number",
+      "label": "Billing Document Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 26,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "irnNumber",
+      "description": "e-Invoice IRN hash",
+      "label": "IRN Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 27,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "ackNumber",
+      "description": "e-Invoice acknowledgement number",
+      "label": "Ack Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 28,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "ackDate",
+      "description": "e-Invoice acknowledgement date",
+      "label": "Ack Date",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 29,
+        "modelArtifactId": []
+      },
+      "formattingType": "date",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "ewayBillNumber",
+      "description": "e-Way Bill / Waybill number",
+      "label": "e-Way Bill Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 30,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "vehicleNumber",
+      "description": "Vehicle / truck registration number",
+      "label": "Vehicle Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 31,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "transporterName",
+      "description": "Transporter / carrier name",
+      "label": "Transporter Name",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 32,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "lrNumber",
+      "description": "LR / RR transport document number",
+      "label": "LR Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 33,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "placeOfSupplyStateCode",
+      "description": "Place of supply state code",
+      "label": "Place of Supply State Code",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 34,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "barcode",
+      "description": "barcode",
+      "label": "Barcode",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 1,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "VendorCode",
+      "description": "Extract Vendor Code",
+      "label": "",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 1,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    }
+  ],
+  "lineItemFields": [
+    {
+      "name": "itemNumber",
+      "description": "Line item / serial number",
+      "label": "Item Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 1,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "description",
+      "description": "Description of goods / material / grade",
+      "label": "Description",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 2,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "hsnCode",
+      "description": "HSN / SAC code of the goods",
+      "label": "HSN Code",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 3,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "heatNumber",
+      "description": "Heat / batch / lot number",
+      "label": "Heat Number",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 4,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "supplyCondition",
+      "description": "Material supply condition",
+      "label": "Supply Condition",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 5,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "quantity",
+      "description": "Invoiced quantity",
+      "label": "Quantity",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 6,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "unitOfMeasure",
+      "description": "Unit of measure (TO, Kgs, MT)",
+      "label": "Unit of Measure",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 7,
+        "modelArtifactId": []
+      },
+      "formattingType": "string",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "unitPrice",
+      "description": "Rate / net rate per unit",
+      "label": "Unit Price",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 8,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "freightRate",
+      "description": "Freight rate per unit if shown",
+      "label": "Freight Rate",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 9,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "lineTaxRate",
+      "description": "Line item tax rate percentage",
+      "label": "Line Tax Rate",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 10,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "lineTaxAmount",
+      "description": "Line item tax amount",
+      "label": "Line Tax Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 11,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "lineNetAmount",
+      "description": "Line item taxable / assessable amount",
+      "label": "Line Net Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 12,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "cgstAmount",
+      "description": "Central GST Amount",
+      "label": "CCGST Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 1,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    },
+    {
+      "name": "sgstAmount",
+      "description": "State GST Amount",
+      "label": "SGST Amount",
+      "categoryName": null,
+      "defaultExtractor": {},
+      "setupType": "static",
+      "setupTypeVersion": "2.0.0",
+      "setup": {
+        "language": [],
+        "type": "auto",
+        "priority": 1,
+        "modelArtifactId": []
+      },
+      "formattingType": "number",
+      "formatting": {},
+      "formattingTypeVersion": "1.0.0"
+    }
+  ]
+}

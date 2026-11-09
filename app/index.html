@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>Invoice Extraction · Document AI</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="shell">
+    <div class="shell-brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path fill="currentColor" d="M6 2.5h8.2L20 8.2V20a1.5 1.5 0 0 1-1.5 1.5h-12A1.5 1.5 0 0 1 5 20V4A1.5 1.5 0 0 1 6.5 2.5H6zm7.5 1.8V8H18l-4.5-3.7zM8 12.2h8v1.3H8v-1.3zm0 3h8v1.3H8v-1.3zm0-6h4.2v1.3H8V9.2z"/>
+        </svg>
+      </span>
+      <div>
+        <div class="product">Document AI</div>
+        <div class="product-sub">Invoice extraction</div>
+      </div>
+    </div>
+    <div class="shell-schema" id="shell-schema">Schema</div>
+  </header>
+
+  <main id="page">
+    <div class="page-head">
+      <div>
+        <p class="kicker">SAP BTP</p>
+        <h1>Extract a GST invoice</h1>
+        <p class="lede">Upload a PDF or image. Document AI reads it with your custom schema, and the invoice stays beside the header and line items.</p>
+      </div>
+      <button type="button" class="btn" id="open-guide">Setup guide</button>
+    </div>
+
+    <div id="schema-note" class="strip information" hidden></div>
+    <div id="message" class="strip" hidden></div>
+
+    <section class="card" aria-labelledby="upload-title">
+      <div class="upload-layout">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload an invoice">
+          <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
+            <path fill="#0070f2" d="M24 6l10 10h-6v12h-8V16h-6l10-10zm-14 26h28v6H10v-6z" opacity=".9"/>
+          </svg>
+          <p class="drop-title">Drop an invoice here</p>
+          <p class="drop-sub">PDF, PNG, JPEG, or TIFF · up to 20 MB</p>
+          <input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,application/pdf,image/png,image/jpeg,image/tiff" hidden />
+        </div>
+        <div class="upload-side">
+          <h2 id="upload-title">Document</h2>
+          <p id="file-meta" class="file-meta">No file selected.</p>
+          <p id="connection" class="status-pill">Checking service key…</p>
+          <label class="schema-field" for="schema-name">Schema
+            <select id="schema-name">
+              <option value="">Loading schemas…</option>
+            </select>
+          </label>
+          <div class="actions">
+            <button type="button" class="btn btn-emphasized" id="extract">Extract invoice</button>
+            <button type="button" class="btn" id="sample">Preview sample</button>
+            <button type="button" class="btn" id="probe">Test connection</button>
+          </div>
+          <details class="advanced" id="advanced">
+            <summary>Request options</summary>
+            <div class="form-grid">
+              <label>Version<input id="schema-version" autocomplete="off" /></label>
+              <label>Document type
+                <select id="document-type">
+                  <option value="custom">custom</option>
+                  <option value="invoice">invoice</option>
+                  <option value="purchaseOrder">purchaseOrder</option>
+                  <option value="paymentAdvice">paymentAdvice</option>
+                </select>
+              </label>
+              <label>Document AI client<input id="dox-client" autocomplete="off" /></label>
+              <label class="span-2">Template name or id
+                <input id="template" autocomplete="off" placeholder="Required when fields use manual setup" />
+              </label>
+            </div>
+            <p class="hint">The schema list is the custom schemas in Document AI. Choosing one loads its fields into the tables and sends that name with <code>POST /document/jobs</code>. The client here is the Document AI client, usually <code>default</code>, not the XSUAA client id. A template is required when the schema fields use manual setup.</p>
+            <div class="actions">
+              <button type="button" class="btn" id="load-schema">Load schema export</button>
+              <input id="schema-file" type="file" accept="application/json,.json" hidden />
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="review" aria-label="Invoice and extracted result">
+      <aside class="preview-pane" aria-labelledby="preview-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="preview-title">Invoice</h2>
+            <p class="panel-sub" id="preview-meta">No file selected.</p>
+          </div>
+        </div>
+        <div class="preview-frame" id="preview-frame">
+          <p class="preview-empty" id="preview-empty">The uploaded invoice stays here, beside the extracted fields.</p>
+          <iframe id="preview-pdf" title="Uploaded invoice" hidden></iframe>
+          <img id="preview-image" alt="" hidden />
+          <p class="preview-empty" id="preview-unsupported" hidden></p>
+        </div>
+      </aside>
+
+      <div class="result-pane">
+        <section id="facets" class="facets" hidden></section>
+
+        <section class="card" aria-labelledby="header-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="header-title">Header</h2>
+              <p class="panel-sub"><span id="header-count">0</span> fields · confidence is the model score from 0 to 1</p>
+            </div>
+            <label class="search">
+              <span class="sr-only">Find a header field</span>
+              <input id="header-filter" type="search" placeholder="Find a field" />
+            </label>
+          </div>
+          <div class="legend">
+            <span class="confidence high"><i></i>90% and above</span>
+            <span class="confidence mid"><i></i>75% to 89%</span>
+            <span class="confidence low"><i></i>Below 75%</span>
+          </div>
+          <div class="table-scroll">
+            <table id="header-table">
+              <caption class="sr-only">Extracted invoice header</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Field</th>
+                  <th scope="col">Value</th>
+                  <th scope="col">Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td class="empty" colspan="3">Loading schema…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="lines-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="lines-title">Line items</h2>
+              <p class="panel-sub"><span id="line-count">0</span> rows</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table id="lines-table">
+              <caption class="sr-only">Extracted invoice line items</caption>
+              <thead></thead>
+              <tbody></tbody>
+              <tfoot></tfoot>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="guide" aria-labelledby="guide-title">
+    <div class="dialog-head">
+      <h2 id="guide-title">Set up Document AI extraction</h2>
+      <button type="button" class="btn icon-btn" id="close-guide" aria-label="Close">Close</button>
+    </div>
+    <div class="dialog-body">
+      <ol class="steps">
+        <li>
+          <strong>Subscribe, then create a service instance.</strong>
+          The Document AI application is where you designed the schema. This page calls the service instance. In your subaccount, open Instances and Subscriptions, create an instance of Document Information Extraction, and create a service key.
+        </li>
+        <li>
+          <strong>Copy the service key into <code>default-env.json</code>.</strong>
+          Start from <code>default-env.sample.json</code>. Use <code>uaa.url</code>, <code>uaa.clientid</code>, <code>uaa.clientsecret</code>, and the service <code>url</code>. Leave this file uncommitted. On Cloud Foundry the same values are read from <code>VCAP_SERVICES</code>.
+        </li>
+        <li>
+          <strong>Activate the schema, and a template if the fields are manual.</strong>
+          Schema Configuration must show the schema as active. The first activated version is <code>1</code>. Custom documents usually use setup type <code>manual</code>, which only returns values after you create and activate a template for a sample invoice. Put that template name in Request options.
+        </li>
+        <li>
+          <strong>Point the columns at your export.</strong>
+          Save the export as <code>schema/ZSFL_GST_Invoice_schema.json</code>, or choose Load schema export. The local file decides the table columns and the default schema name. BTP still extracts with the schema you activated there, so the names must match.
+        </li>
+        <li>
+          <strong>Start the app and upload an invoice.</strong>
+          Run <code>npm install</code> and <code>npm start</code>, then open the page. Choose a PDF or a single-page PNG or JPEG and press Extract invoice. The server asks XSUAA for a token, posts the file to <code>/document/jobs</code>, and polls <code>GET /document/jobs/{id}?extractedValues=true</code> until the status is DONE.
+        </li>
+        <li>
+          <strong>Read the two tables.</strong>
+          Header fields keep the schema order and show a confidence score. Line items are one row per extracted line. A green score is 90% or higher, orange is 75% to 89%, and red is below that. Empty cells are fields the schema asked for and the model did not return.
+        </li>
+      </ol>
+      <p>The request options look like this:</p>
+      <pre>{
+  "clientId": "default",
+  "documentType": "custom",
+  "schemaName": "ZSFL_GST_Invoice",
+  "schemaVersion": "1",
+  "templateName": "your-template"
+}</pre>
+      <p>Preview sample fills the tables with a fictional GST invoice so you can learn the layout before the service key works. It does not call BTP.</p>
+      <p>The service key used to be hardcoded in <code>srv/dox.js</code>. It is read from the environment now. Rotate that key in BTP if this repository was shared. The old trial authentication host currently returns 404, so create a service key from the subaccount you are using.</p>
+      <p>Next we can save a confirmed header into the CAP invoice entity, send field corrections back to Document AI, and keep a list of jobs.</p>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
