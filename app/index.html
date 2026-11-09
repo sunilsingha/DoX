@@ -27,8 +27,8 @@
     <div class="page-head">
       <div>
         <p class="kicker">SAP BTP</p>
-        <h1>Extract a document</h1>
-        <p class="lede">Choose a schema, then upload a PDF or image. Document AI reads the header and line items for that schema.</p>
+        <h1>Extract a GST invoice</h1>
+        <p class="lede">Upload a PDF or image. Document AI reads it with your custom schema, and the invoice stays beside the header and line items.</p>
       </div>
       <button type="button" class="btn" id="open-guide">Setup guide</button>
     </div>
@@ -42,34 +42,27 @@
           <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
             <path fill="#0070f2" d="M24 6l10 10h-6v12h-8V16h-6l10-10zm-14 26h28v6H10v-6z" opacity=".9"/>
           </svg>
-          <p class="drop-title">Drop a document here</p>
+          <p class="drop-title">Drop an invoice here</p>
           <p class="drop-sub">PDF, PNG, JPEG, or TIFF · up to 20 MB</p>
           <input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,application/pdf,image/png,image/jpeg,image/tiff" hidden />
         </div>
         <div class="upload-side">
           <h2 id="upload-title">Document</h2>
-          <label class="schema-picker" for="schema-list">Schema
-            <select id="schema-list">
-              <option value="local">Loading schemas…</option>
-            </select>
-          </label>
-          <label class="check" for="show-sap">
-            <input id="show-sap" type="checkbox" />
-            Show SAP standard schemas
-          </label>
-          <p id="schema-list-note" class="hint">Schemas configured in Document AI appear here after the service key is set.</p>
           <p id="file-meta" class="file-meta">No file selected.</p>
           <p id="connection" class="status-pill">Checking service key…</p>
+          <label class="schema-field" for="schema-name">Schema
+            <select id="schema-name">
+              <option value="">Loading schemas…</option>
+            </select>
+          </label>
           <div class="actions">
-            <button type="button" class="btn btn-emphasized" id="extract">Extract document</button>
+            <button type="button" class="btn btn-emphasized" id="extract">Extract invoice</button>
             <button type="button" class="btn" id="sample">Preview sample</button>
             <button type="button" class="btn" id="probe">Test connection</button>
-            <button type="button" class="btn" id="refresh-schemas">Refresh list</button>
           </div>
           <details class="advanced" id="advanced">
             <summary>Request options</summary>
             <div class="form-grid">
-              <label>Schema name<input id="schema-name" autocomplete="off" /></label>
               <label>Version<input id="schema-version" autocomplete="off" /></label>
               <label>Document type
                 <select id="document-type">
@@ -84,7 +77,7 @@
                 <input id="template" autocomplete="off" placeholder="Required when fields use manual setup" />
               </label>
             </div>
-            <p class="hint">These become the <code>options</code> part of <code>POST /document/jobs</code>. The client here is the Document AI client, usually <code>default</code>, not the XSUAA client id. A template is required when the schema fields use manual setup.</p>
+            <p class="hint">The schema list is the custom schemas in Document AI. Choosing one loads its fields into the tables and sends that name with <code>POST /document/jobs</code>. The client here is the Document AI client, usually <code>default</code>, not the XSUAA client id. A template is required when the schema fields use manual setup.</p>
             <div class="actions">
               <button type="button" class="btn" id="load-schema">Load schema export</button>
               <input id="schema-file" type="file" accept="application/json,.json" hidden />
@@ -94,55 +87,74 @@
       </div>
     </section>
 
-    <section id="facets" class="facets" hidden></section>
-
-    <section class="card" aria-labelledby="header-title">
-      <div class="panel-head">
-        <div>
-          <h2 id="header-title">Header</h2>
-          <p class="panel-sub"><span id="header-count">0</span> fields · confidence is the model score from 0 to 1</p>
+    <section class="review" aria-label="Invoice and extracted result">
+      <aside class="preview-pane" aria-labelledby="preview-title">
+        <div class="panel-head">
+          <div>
+            <h2 id="preview-title">Invoice</h2>
+            <p class="panel-sub" id="preview-meta">No file selected.</p>
+          </div>
         </div>
-        <label class="search">
-          <span class="sr-only">Find a header field</span>
-          <input id="header-filter" type="search" placeholder="Find a field" />
-        </label>
-      </div>
-      <div class="legend">
-        <span class="confidence high"><i></i>90% and above</span>
-        <span class="confidence mid"><i></i>75% to 89%</span>
-        <span class="confidence low"><i></i>Below 75%</span>
-      </div>
-      <div class="table-scroll">
-        <table id="header-table">
-          <caption class="sr-only">Extracted invoice header</caption>
-          <thead>
-            <tr>
-              <th scope="col">Field</th>
-              <th scope="col">Value</th>
-              <th scope="col">Confidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td class="empty" colspan="3">Loading schema…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="card" aria-labelledby="lines-title">
-      <div class="panel-head">
-        <div>
-          <h2 id="lines-title">Line items</h2>
-          <p class="panel-sub"><span id="line-count">0</span> rows</p>
+        <div class="preview-frame" id="preview-frame">
+          <p class="preview-empty" id="preview-empty">The uploaded invoice stays here, beside the extracted fields.</p>
+          <iframe id="preview-pdf" title="Uploaded invoice" hidden></iframe>
+          <img id="preview-image" alt="" hidden />
+          <p class="preview-empty" id="preview-unsupported" hidden></p>
         </div>
-      </div>
-      <div class="table-scroll">
-        <table id="lines-table">
-          <caption class="sr-only">Extracted invoice line items</caption>
-          <thead></thead>
-          <tbody></tbody>
-          <tfoot></tfoot>
-        </table>
+      </aside>
+
+      <div class="result-pane">
+        <section id="facets" class="facets" hidden></section>
+
+        <section class="card" aria-labelledby="header-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="header-title">Header</h2>
+              <p class="panel-sub"><span id="header-count">0</span> fields · confidence is the model score from 0 to 1</p>
+            </div>
+            <label class="search">
+              <span class="sr-only">Find a header field</span>
+              <input id="header-filter" type="search" placeholder="Find a field" />
+            </label>
+          </div>
+          <div class="legend">
+            <span class="confidence high"><i></i>90% and above</span>
+            <span class="confidence mid"><i></i>75% to 89%</span>
+            <span class="confidence low"><i></i>Below 75%</span>
+          </div>
+          <div class="table-scroll">
+            <table id="header-table">
+              <caption class="sr-only">Extracted invoice header</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Field</th>
+                  <th scope="col">Value</th>
+                  <th scope="col">Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td class="empty" colspan="3">Loading schema…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="lines-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="lines-title">Line items</h2>
+              <p class="panel-sub"><span id="line-count">0</span> rows</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table id="lines-table">
+              <caption class="sr-only">Extracted invoice line items</caption>
+              <thead></thead>
+              <tbody></tbody>
+              <tfoot></tfoot>
+            </table>
+          </div>
+        </section>
       </div>
     </section>
   </main>
@@ -167,12 +179,8 @@
           Schema Configuration must show the schema as active. The first activated version is <code>1</code>. Custom documents usually use setup type <code>manual</code>, which only returns values after you create and activate a template for a sample invoice. Put that template name in Request options.
         </li>
         <li>
-          <strong>Choose the schema from the list.</strong>
-          After the service key works, Refresh list calls Document AI and fills the Schema menu with every schema in that subaccount. Invoice and letter of credit are separate entries. Pick one before you upload. SAP standard schemas stay hidden until you tick Show SAP standard schemas.
-        </li>
-        <li>
           <strong>Point the columns at your export.</strong>
-          Save the export as <code>schema/ZSFL_GST_Invoice_schema.json</code>, or choose Load schema export. The file in this project is a GST stand-in: the Downloads export was not in the workspace. The local file decides the table columns and the default schema name. BTP still extracts with the schema you activated there, so the names must match.
+          Save the export as <code>schema/ZSFL_GST_Invoice_schema.json</code>, or choose Load schema export. The local file decides the table columns and the default schema name. BTP still extracts with the schema you activated there, so the names must match.
         </li>
         <li>
           <strong>Start the app and upload an invoice.</strong>

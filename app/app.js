@@ -4,28 +4,23 @@
     header: [],
     lineItems: [],
     currency: 'INR',
-    busy: false,
-    remoteSchemas: [],
-    configured: false,
-    syncingList: false
+    busy: false
   };
 
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('file');
+  let previewUrl = '';
+  let previewResize = null;
   const schemaInput = document.getElementById('schema-file');
   const message = document.getElementById('message');
   const guide = document.getElementById('guide');
 
   document.getElementById('open-guide').addEventListener('click', () => guide.showModal());
   document.getElementById('close-guide').addEventListener('click', () => guide.close());
+  document.getElementById('schema-name').addEventListener('change', () => useSelectedSchema());
   document.getElementById('extract').addEventListener('click', () => extract('live'));
   document.getElementById('sample').addEventListener('click', () => extract('sample'));
   document.getElementById('probe').addEventListener('click', probe);
-  document.getElementById('refresh-schemas').addEventListener('click', () => refreshSchemas());
-  document.getElementById('show-sap').addEventListener('change', () => renderSchemaList());
-  document.getElementById('schema-list').addEventListener('change', () => {
-    if (!state.syncingList) selectSchemaFromList();
-  });
   document.getElementById('load-schema').addEventListener('click', () => schemaInput.click());
   document.getElementById('header-filter').addEventListener('input', () => renderHeader());
   schemaInput.addEventListener('change', () => {
@@ -68,8 +63,7 @@
       ]);
       applySchema(schema);
       renderConnection(status);
-      renderSchemaList();
-      if (status.configured) await refreshSchemas({ quiet: true });
+      await loadSchemaChoices();
     } catch (error) {
       showMessage('negative', error.message);
     }
@@ -95,7 +89,73 @@
     renderFacets();
     renderHeader();
     renderLines();
-    syncSchemaSelect();
+  }
+
+  async function loadSchemaChoices() {
+    const clientId = document.getElementById('dox-client').value.trim();
+    const query = clientId ? `?clientId=${encodeURIComponent(clientId)}` : '';
+    try {
+      const response = await fetch(`/api/schemas${query}`);
+      const body = await readJson(response);
+      fillSchemaSelect(body.schemas || [], state.schema && state.schema.name);
+    } catch (error) {
+      fillSchemaSelect([], state.schema && state.schema.name);
+      showMessage('negative', error.message);
+    }
+  }
+
+  function fillSchemaSelect(schemas, selectedName) {
+    const select = document.getElementById('schema-name');
+    const current = selectedName || '';
+    const items = schemas.slice();
+    if (current && !items.some(schema => schema.name === current)) {
+      items.unshift({
+        id: '',
+        name: current,
+        documentType: document.getElementById('document-type').value || 'custom',
+        version: document.getElementById('schema-version').value || ''
+      });
+    }
+    select.innerHTML = '';
+    if (!items.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No custom schemas';
+      select.appendChild(option);
+      return;
+    }
+    for (const schema of items) {
+      const option = document.createElement('option');
+      option.value = schema.name;
+      option.textContent = `${schema.name} · ${schema.documentType || 'custom'}`;
+      option.dataset.id = schema.id || '';
+      option.dataset.version = schema.version || '';
+      option.dataset.documentType = schema.documentType || 'custom';
+      select.appendChild(option);
+    }
+    if ([...select.options].some(option => option.value === current)) select.value = current;
+  }
+
+  async function useSelectedSchema() {
+    const select = document.getElementById('schema-name');
+    const option = select.selectedOptions && select.selectedOptions[0];
+    if (!option || !option.value || !option.dataset.id) return;
+    document.getElementById('schema-version').value = option.dataset.version || '';
+    setDocumentType(option.dataset.documentType || 'custom');
+    if (state.schema && state.schema.name === option.value) return;
+    const clientId = document.getElementById('dox-client').value.trim();
+    const query = clientId ? `?clientId=${encodeURIComponent(clientId)}` : '';
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/schemas/${encodeURIComponent(option.dataset.id)}/use${query}`, { method: 'POST' });
+      const schema = await readJson(response);
+      applySchema(schema);
+      showMessage('positive', `Loaded ${schema.name}, version ${schema.version}, from Document AI.`);
+    } catch (error) {
+      showMessage('negative', error.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function setDocumentType(value) {
@@ -117,103 +177,12 @@
       document.getElementById('template').value = status.template || '';
     }
     node.classList.remove('ready', 'warn', 'bad');
-    state.configured = Boolean(status.configured);
     if (status.configured) {
       node.classList.add('ready');
       node.textContent = `Service key found · ${status.apiHost}`;
     } else {
       node.classList.add('warn');
       node.textContent = 'Service key not configured';
-      document.getElementById('schema-list-note').textContent = 'Add the service key to default-env.json, then press Refresh list. Until then, the menu shows the schema file saved with this app.';
-    }
-  }
-
-  function renderSchemaList() {
-    const select = document.getElementById('schema-list');
-    const showSap = document.getElementById('show-sap').checked;
-    const visible = state.remoteSchemas.filter(item => showSap || !item.standard);
-    state.syncingList = true;
-    select.replaceChildren();
-    const local = document.createElement('option');
-    local.value = 'local';
-    local.textContent = `Saved in this app · ${state.schema ? state.schema.name : 'local file'}`;
-    select.appendChild(local);
-    visible.forEach(item => {
-      const option = document.createElement('option');
-      option.value = item.id || item.name;
-      option.textContent = `${item.name} · ${item.documentType} · v${item.version}`;
-      select.appendChild(option);
-    });
-    syncSchemaSelect();
-    state.syncingList = false;
-    const note = document.getElementById('schema-list-note');
-    if (!state.remoteSchemas.length) return;
-    if (!visible.length) {
-      note.textContent = 'No custom schemas were returned. Tick Show SAP standard schemas to see the ones supplied by SAP.';
-      return;
-    }
-    note.textContent = 'Pick the document type before you upload. Each choice is one schema in your Document AI subaccount.';
-  }
-
-  function syncSchemaSelect() {
-    const select = document.getElementById('schema-list');
-    if (!select.options.length) return;
-    const id = state.schema && state.schema.id;
-    const match = id && [...select.options].some(option => option.value === id);
-    state.syncingList = true;
-    select.value = match ? id : 'local';
-    state.syncingList = false;
-  }
-
-  async function refreshSchemas(options) {
-    const quiet = options && options.quiet;
-    setBusy(true);
-    try {
-      const body = await fetch('/api/schemas').then(readJson);
-      state.remoteSchemas = body.schemas || [];
-      renderSchemaList();
-      const current = state.schema;
-      const match = current && state.remoteSchemas.find(item => item.name === current.name && item.id);
-      if (match && current.placeholder && match.id !== current.id) {
-        document.getElementById('schema-list').value = match.id;
-        await selectSchemaFromList();
-      }
-    } catch (error) {
-      document.getElementById('schema-list-note').textContent = 'The schema list could not be loaded. The menu still shows the schema saved with this app.';
-      if (!quiet) showMessage('negative', error.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function selectSchemaFromList() {
-    const selected = document.getElementById('schema-list').value;
-    if (!selected || selected === 'local') {
-      setBusy(true);
-      try {
-        applySchema(await fetch('/api/schema').then(readJson));
-      } catch (error) {
-        showMessage('negative', error.message);
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    if (!/^[A-Za-z0-9-]{8,}$/.test(selected)) {
-      showMessage('critical', 'This schema did not include an id, so its fields cannot be loaded from Document AI.');
-      syncSchemaSelect();
-      return;
-    }
-    setBusy(true);
-    try {
-      const schema = await fetch(`/api/schemas/${encodeURIComponent(selected)}`).then(readJson);
-      applySchema(schema);
-      showMessage('information', `${schema.name} is selected. The tables below use its header and line-item fields.`);
-    } catch (error) {
-      showMessage('negative', error.message);
-      syncSchemaSelect();
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -221,9 +190,82 @@
     const meta = document.getElementById('file-meta');
     if (!file) {
       meta.textContent = 'No file selected.';
+      setPreview(null);
       return;
     }
-    meta.textContent = `${file.name} · ${formatBytes(file.size)}`;
+    const label = `${file.name} · ${formatBytes(file.size)}`;
+    meta.textContent = label;
+    document.getElementById('preview-meta').textContent = label;
+    setPreview(file);
+  }
+
+  function setPreview(file) {
+    const empty = document.getElementById('preview-empty');
+    const pdf = document.getElementById('preview-pdf');
+    const image = document.getElementById('preview-image');
+    const unsupported = document.getElementById('preview-unsupported');
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = '';
+    }
+    pdf.hidden = true;
+    pdf.removeAttribute('src');
+    pdf.style.width = '';
+    pdf.style.height = '';
+    image.hidden = true;
+    image.removeAttribute('src');
+    unsupported.hidden = true;
+    if (!file) {
+      empty.hidden = false;
+      document.getElementById('preview-meta').textContent = 'No file selected.';
+      return;
+    }
+    const type = String(file.type || '').toLowerCase();
+    const name = String(file.name || '').toLowerCase();
+    const isPdf = type === 'application/pdf' || name.endsWith('.pdf');
+    const isTiff = type === 'image/tiff' || name.endsWith('.tif') || name.endsWith('.tiff');
+    const isImage = !isTiff && (type.startsWith('image/') || /\.(png|jpe?g)$/.test(name));
+    empty.hidden = true;
+    if (isTiff || (!isPdf && !isImage)) {
+      unsupported.hidden = false;
+      unsupported.textContent = isTiff
+        ? 'This browser cannot display TIFF files. The file is still sent to Document AI.'
+        : 'This file cannot be previewed here. It is still sent to Document AI.';
+      return;
+    }
+    previewUrl = URL.createObjectURL(file);
+    if (isPdf) {
+      pdf.hidden = false;
+      watchPreviewFrame();
+      requestAnimationFrame(() => {
+        sizePdfFrame();
+        pdf.src = previewUrl + '#toolbar=0&navpanes=0&scrollbar=1&zoom=page-width';
+      });
+      return;
+    }
+    image.alt = file.name || 'Uploaded invoice';
+    image.onerror = () => {
+      image.hidden = true;
+      unsupported.hidden = false;
+      unsupported.textContent = 'This image could not be previewed. The file is still sent to Document AI.';
+    };
+    image.src = previewUrl;
+    image.hidden = false;
+  }
+
+  function sizePdfFrame() {
+    const frame = document.getElementById('preview-frame');
+    const pdf = document.getElementById('preview-pdf');
+    if (!frame || pdf.hidden) return;
+    pdf.style.width = frame.clientWidth + 'px';
+    pdf.style.height = frame.clientHeight + 'px';
+  }
+
+  function watchPreviewFrame() {
+    const frame = document.getElementById('preview-frame');
+    if (previewResize || typeof ResizeObserver === 'undefined') return;
+    previewResize = new ResizeObserver(() => sizePdfFrame());
+    previewResize.observe(frame);
   }
 
   async function extract(mode) {
@@ -235,7 +277,6 @@
     }
     const form = new FormData();
     form.set('mode', mode);
-    if (state.schema) form.set('schemaJson', JSON.stringify(state.schema));
     form.set('schemaName', document.getElementById('schema-name').value.trim());
     form.set('schemaVersion', document.getElementById('schema-version').value.trim());
     form.set('documentType', document.getElementById('document-type').value);
@@ -244,8 +285,8 @@
     if (file) form.set('file', file);
     setBusy(true);
     showMessage('information', mode === 'sample'
-      ? 'Filling the tables with sample values for the selected schema. Document AI is not called.'
-      : 'Uploading the document and waiting for Document AI.');
+      ? 'Filling the tables with a sample GST invoice.'
+      : 'Uploading the invoice and waiting for Document AI.');
     try {
       const response = await fetch('/api/extract', { method: 'POST', body: form });
       const body = await readJson(response);
@@ -267,7 +308,7 @@
     renderLines();
     const filled = hasValues(result);
     if (result.mode === 'sample') {
-      showMessage('information', 'Sample values only. Document AI was not called. The tables use the selected schema.');
+      showMessage('information', 'Sample invoice only. Document AI was not called. Header and line items below use the schema columns.');
       return;
     }
     const job = result.jobId ? ` Job ${result.jobId}.` : '';
@@ -285,7 +326,6 @@
       const body = await readJson(response);
       renderConnection(body);
       showMessage('positive', `Connection succeeded. Token host ${body.tokenHost}.`);
-      await refreshSchemas({ quiet: true });
     } catch (error) {
       const node = document.getElementById('connection');
       node.classList.remove('ready', 'warn');
@@ -604,8 +644,7 @@
     document.querySelectorAll('.actions .btn').forEach(button => {
       button.disabled = busy;
     });
-    document.getElementById('schema-list').disabled = busy;
-    document.getElementById('show-sap').disabled = busy;
+    document.getElementById('schema-name').disabled = busy;
   }
 
   async function readJson(response) {

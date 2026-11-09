@@ -167,7 +167,7 @@ function normalizeField(field, index) {
     name,
     label: field.label || field.description || humanize(name),
     description: field.description || '',
-    type: String(field.type || field.dataType || 'string').toLowerCase(),
+    type: String(field.type || field.formattingType || field.dataType || 'string').toLowerCase(),
     setupType: field.setupType || '',
     group: field.group || ''
   };
@@ -208,7 +208,6 @@ function normalizeSchema(raw) {
     lineItemFields = split.lineItemFields;
   }
   const schema = {
-    id: root.id || root.schemaId || '',
     name: root.name || root.schemaName || 'ZSFL_GST_Invoice',
     description: root.schemaDescription || root.description || versionNode.description || '',
     documentType: root.documentType || versionNode.documentType || 'custom',
@@ -263,8 +262,11 @@ function sampleLines() {
     const igstAmount = money(taxableAmount * row.igstRate / 100);
     return {
       serialNumber: String(index + 1),
+      itemNumber: String(index + 1),
       ...row,
+      hsnCode: row.hsnSac,
       taxableAmount,
+      lineNetAmount: taxableAmount,
       cgstAmount,
       sgstAmount,
       igstAmount,
@@ -296,11 +298,14 @@ function sampleHeader(lines) {
     ackNumber: '112010123456789',
     ackDate: '2026-11-02',
     taxableValue,
+    taxableAmount: taxableValue,
     cgstAmount,
     sgstAmount,
     igstAmount,
     roundOff: 0,
     invoiceTotal: money(taxableValue + cgstAmount + sgstAmount + igstAmount),
+    totalInvoiceValue: money(taxableValue + cgstAmount + sgstAmount + igstAmount),
+    irnNumber: 'a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00',
     currencyCode: 'INR'
   };
 }
@@ -596,53 +601,51 @@ async function extractLive({ buffer, filename, mediaType, options }) {
   );
 }
 
-function schemaRecords(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== 'object') return [];
-  return payload.results || payload.schemas || payload.value || [];
+function schemaRecords(data) {
+  if (!data || typeof data !== 'object') return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.schemas)) return data.schemas;
+  if (Array.isArray(data.results)) return data.results;
+  return [];
 }
 
-function versionOf(schema) {
-  const versions = schema.versions || schema.schemaVersions || [];
-  if (!versions.length) {
-    return {
-      version: String(schema.version || schema.schemaVersion || '1'),
-      status: String(schema.status || '')
-    };
+function customSchemaChoices(pages) {
+  const byKey = new Map();
+  for (const page of pages || []) {
+    for (const schema of schemaRecords(page)) {
+      if (!schema || schema.predefined === true) continue;
+      const name = schema.name || schema.schemaName || '';
+      if (!name) continue;
+      const summary = {
+        id: schema.id || '',
+        name,
+        documentType: schema.documentType || 'custom',
+        version: String(schema.version || schema.schemaVersion || '1'),
+        state: schema.state || schema.status || ''
+      };
+      const key = summary.id || summary.name;
+      if (!byKey.has(key)) byKey.set(key, summary);
+    }
   }
-  const active = versions.find(version => String(version.status || '').toLowerCase() === 'active');
-  const chosen = active || versions[versions.length - 1];
-  return {
-    version: String(chosen.version || chosen.schemaVersion || '1'),
-    status: String(chosen.status || '')
-  };
+  return [...byKey.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function summarizeSchemaEntry(schema) {
-  const version = versionOf(schema);
-  const name = schema.name || schema.schemaName || '';
-  return {
-    id: schema.id || schema.schemaId || '',
-    name,
-    description: schema.description || schema.schemaDescription || '',
-    documentType: schema.documentType || 'custom',
-    clientId: schema.clientId || 'default',
-    version: version.version,
-    status: version.status,
-    standard: /^SAP_/i.test(name)
-  };
+function configuredClient(requested) {
+  const config = loadConfig();
+  const missing = missingKeys(config);
+  if (missing.length) {
+    throw new DocumentAiError(`Document AI is not configured. Add ${missing.join(', ')} to default-env.json.`, 400);
+  }
+  const clientId = String(requested || config.doxClient || 'default').trim() || 'default';
+  return { config, clientId };
 }
 
-function summarizeSchemaList(payload) {
-  return schemaRecords(payload).map(summarizeSchemaEntry).filter(item => item.name);
-}
-
-async function documentAiGet(config, token, resourcePath, params) {
+async function getSchemaPage(config, token, clientId, offset) {
   let response;
   try {
-    response = await axios.get(`${config.apiUrl.replace(/\/+$/, '')}${resourcePath}`, {
+    response = await axios.get(`${config.apiUrl.replace(/\/+$/, '')}/schemas`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      params,
+      params: { clientId, predefined: false, offset },
       timeout: 20000,
       validateStatus: () => true
     });
@@ -651,7 +654,7 @@ async function documentAiGet(config, token, resourcePath, params) {
   }
   if (response.status !== 200) {
     throw new DocumentAiError(
-      `Document AI schema request failed (${response.status}). ${safeDetail(response.data)}`.trim(),
+      `Could not list schemas (${response.status}). ${safeDetail(response.data)}`.trim(),
       response.status >= 400 && response.status < 500 ? response.status : 502,
       safeDetail(response.data)
     );
@@ -659,63 +662,51 @@ async function documentAiGet(config, token, resourcePath, params) {
   return response.data;
 }
 
-function requireConfig() {
-  const config = loadConfig();
-  const missing = missingKeys(config);
-  if (missing.length) {
-    throw new DocumentAiError(`Document AI is not configured. Add ${missing.join(', ')} to default-env.json.`, 400);
-  }
-  return config;
-}
-
-async function listRemoteSchemas() {
-  const config = requireConfig();
+async function listCustomSchemas(requestedClientId) {
+  const { config, clientId } = configuredClient(requestedClientId);
   const token = await getToken(config);
+  const pages = [];
   const seen = new Set();
-  const schemas = [];
-  const limit = 100;
-  for (let page = 0; page < 10; page += 1) {
-    const payload = await documentAiGet(config, token, '/schemas', {
-      clientId: config.doxClient || 'default',
-      limit,
-      offset: page * limit
-    });
-    const batch = summarizeSchemaList(payload);
-    let added = 0;
-    batch.forEach(item => {
-      const key = item.id || `${item.name}@${item.version}`;
-      if (seen.has(key)) return;
+  for (let offset = 0; offset < 200; offset += 10) {
+    const page = await getSchemaPage(config, token, clientId, offset);
+    const batch = schemaRecords(page);
+    if (!batch.length) break;
+    const fresh = batch.filter(schema => {
+      const key = schema.id || schema.name;
+      if (!key || seen.has(key)) return false;
       seen.add(key);
-      schemas.push(item);
-      added += 1;
+      return true;
     });
-    if (added === 0 || batch.length < limit) break;
+    if (!fresh.length) break;
+    pages.push({ schemas: fresh });
+    if (batch.length < 10) break;
   }
-  schemas.sort((left, right) => left.name.localeCompare(right.name));
-  return schemas;
+  return customSchemaChoices(pages);
 }
 
-async function getRemoteSchema(schemaId) {
-  if (!schemaId || !/^[A-Za-z0-9-]{8,}$/.test(schemaId)) {
-    throw new DocumentAiError('Choose a schema from the list.', 400);
-  }
-  const config = requireConfig();
+async function useRemoteSchema(id, requestedClientId) {
+  if (!id) throw new DocumentAiError('Choose a schema.', 400);
+  const { config, clientId } = configuredClient(requestedClientId);
   const token = await getToken(config);
-  const payload = await documentAiGet(config, token, `/schemas/${schemaId}`, {
-    clientId: config.doxClient || 'default'
-  });
-  return normalizeSchema(payload);
-}
-
-function schemaFromRequest(body) {
-  if (!body || !body.schemaJson) return loadSchemaSync();
-  let parsed;
+  let response;
   try {
-    parsed = JSON.parse(body.schemaJson);
+    response = await axios.get(`${config.apiUrl.replace(/\/+$/, '')}/schemas/${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      params: { clientId },
+      timeout: 20000,
+      validateStatus: () => true
+    });
   } catch (error) {
-    throw new DocumentAiError('The selected schema could not be read.', 400);
+    throw new DocumentAiError(`Could not reach Document AI. ${error.message}`, 502);
   }
-  return normalizeSchema(parsed);
+  if (response.status !== 200 || !response.data) {
+    throw new DocumentAiError(
+      `Could not load that schema (${response.status}). ${safeDetail(response.data)}`.trim(),
+      response.status >= 400 && response.status < 500 ? response.status : 502,
+      safeDetail(response.data)
+    );
+  }
+  return saveSchema(response.data);
 }
 
 function requestFile(file) {
@@ -753,17 +744,17 @@ function registerRoutes(app) {
   app.get('/api/schemas', async (req, res) => {
     try {
       res.set('Cache-Control', 'no-store');
-      const schemas = await listRemoteSchemas();
+      const schemas = await listCustomSchemas(req.query.clientId);
       res.json({ schemas });
     } catch (error) {
       sendError(res, error);
     }
   });
 
-  app.get('/api/schemas/:schemaId', async (req, res) => {
+  app.post('/api/schemas/:id/use', async (req, res) => {
     try {
       res.set('Cache-Control', 'no-store');
-      res.json(await getRemoteSchema(req.params.schemaId));
+      res.json(await useRemoteSchema(req.params.id, req.query.clientId));
     } catch (error) {
       sendError(res, error);
     }
@@ -804,7 +795,7 @@ function registerRoutes(app) {
       }
       try {
         res.set('Cache-Control', 'no-store');
-        const schema = schemaFromRequest(req.body);
+        const schema = loadSchemaSync();
         const mode = String(req.body.mode || 'live').toLowerCase();
         const options = buildOptions({
           schema,
@@ -860,7 +851,7 @@ module.exports = {
   buildOptions,
   mergeExtraction,
   publicStatus,
-  summarizeSchemaList,
+  customSchemaChoices,
   registerRoutes,
   sampleLines,
   sampleHeader

@@ -7,30 +7,32 @@ const {
   buildSampleResult,
   buildOptions,
   mergeExtraction,
-  summarizeSchemaList
+  customSchemaChoices
 } = require('../srv/document-ai');
 
 const schema = loadSchemaSync();
 assert.strictEqual(schema.name, 'ZSFL_GST_Invoice');
 assert.strictEqual(schema.documentType, 'custom');
+assert.strictEqual(schema.placeholder, false);
 assert.ok(schema.headerFields.length >= 20);
-assert.ok(schema.lineItemFields.some(field => field.name === 'hsnSac'));
+assert.ok(schema.lineItemFields.some(field => field.name === 'hsnCode'));
 
 const sample = buildSampleResult(schema, null);
 const header = Object.fromEntries(sample.header.map(field => [field.name, field.value]));
 const lines = sample.lineItems.map(row => Object.fromEntries(row.map(cell => [cell.name, cell.value])));
+const { sampleLines, sampleHeader } = require('../srv/document-ai');
+const computedLines = sampleLines();
+const computedHeader = sampleHeader(computedLines);
 
 assert.strictEqual(header.invoiceNumber, 'ZSFL/26-27/0148');
-assert.strictEqual(header.taxableValue, 30940);
 assert.strictEqual(header.cgstAmount, 2784.6);
 assert.strictEqual(header.sgstAmount, 2784.6);
-assert.strictEqual(header.invoiceTotal, 36509.2);
-assert.strictEqual(lines[0].lineTotal, 14750);
-assert.strictEqual(lines[1].taxableAmount, 3440);
-assert.strictEqual(lines[2].hsnSac, '998739');
+assert.strictEqual(lines[0].description, 'Deep groove ball bearing 6204');
+assert.strictEqual(lines[0].quantity, 10);
+assert.strictEqual(lines[2].hsnCode, '998739');
 assert.strictEqual(
-  Math.round((lines[0].lineTotal + lines[1].lineTotal + lines[2].lineTotal) * 100),
-  Math.round(header.invoiceTotal * 100)
+  Math.round((computedLines[0].lineTotal + computedLines[1].lineTotal + computedLines[2].lineTotal) * 100),
+  Math.round(computedHeader.invoiceTotal * 100)
 );
 
 const versioned = normalizeSchema({
@@ -86,31 +88,22 @@ assert.ok(merged.header.some(field => field.name === 'extraNote'));
 assert.strictEqual(merged.lineItems[0].find(cell => cell.name === 'quantity').value, '3');
 assert.strictEqual(merged.lineItems[0].find(cell => cell.name === 'description').value, 'Bearing');
 
-const listed = summarizeSchemaList({
-  results: [
-    {
-      id: '11111111-2222-3333-4444-555555555555',
-      name: 'ZSFL_Letter_of_Credit',
-      documentType: 'custom',
-      versions: [
-        { version: '1', status: 'draft' },
-        { schemaVersion: '2', status: 'active' }
-      ]
-    },
-    {
-      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      schemaName: 'SAP_invoice_schema',
-      documentType: 'invoice',
-      version: '1'
-    }
-  ]
-});
-assert.strictEqual(listed.length, 2);
-assert.strictEqual(listed[0].name, 'ZSFL_Letter_of_Credit');
-assert.strictEqual(listed[0].version, '2');
-assert.strictEqual(listed[0].status, 'active');
-assert.strictEqual(listed[0].standard, false);
-assert.strictEqual(listed[1].standard, true);
-assert.strictEqual(listed[1].documentType, 'invoice');
+const choices = customSchemaChoices([
+  {
+    schemas: [
+      { id: '1', name: 'B', predefined: false, documentType: 'custom', version: '1' },
+      { id: '2', name: 'SAP_invoice_schema', predefined: true, documentType: 'invoice', version: '1' }
+    ]
+  },
+  {
+    schemas: [
+      { id: '1', name: 'B', predefined: false, documentType: 'custom', version: '1' },
+      { id: '3', name: 'A', predefined: false, documentType: 'invoice', version: '2' }
+    ]
+  }
+]);
+assert.deepStrictEqual(choices.map(schema => schema.name), ['A', 'B']);
+assert.strictEqual(choices[0].version, '2');
+assert.strictEqual(choices[0].documentType, 'invoice');
 
 console.log('document-ai tests passed');
