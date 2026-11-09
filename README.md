@@ -41,7 +41,11 @@ In Document AI, open Schema Configuration and confirm `ZSFL_GST_Invoice` is acti
 
 Custom fields with setup type `manual` return values only after you create a template from a sample invoice and activate it. Put that template name in Request options on the page, or in `DOX_TEMPLATE`.
 
-Save your export as `schema/ZSFL_GST_Invoice_schema.json`, or use Load schema export on the page. The page uses the file for column labels and the default schema name. BTP extracts with the activated schema of the same name.
+Save your export as `schema/ZSFL_GST_Invoice_schema.json`, or use Load schema export on the page. The page uses the file until it can read the live list. BTP extracts with the schema you select.
+
+## Choose a schema
+
+When `default-env.json` has a working service key, the Schema menu calls `GET /schemas` and lists the schemas in your Document AI client. Choosing one calls `GET /schemas/{id}` and switches the header and line-item columns to that schema. Invoice and letter of credit are two entries in the same list. Names that start with `SAP_` stay hidden until you tick Show SAP standard schemas.
 
 ## 4. Run
 

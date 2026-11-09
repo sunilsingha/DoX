@@ -110,6 +110,25 @@ h2 { font-size: 1.125rem; }
   margin: 0.35rem 0 0;
 }
 
+.schema-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.7rem;
+  color: var(--sapLabelColor);
+  font-size: 0.75rem;
+}
+
+.schema-picker select { width: 100%; }
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+  color: var(--sapLabelColor);
+}
+
 .card {
   background: #fff;
   border: 1px solid var(--sapBorderColor);

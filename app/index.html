@@ -27,8 +27,8 @@
     <div class="page-head">
       <div>
         <p class="kicker">SAP BTP</p>
-        <h1>Extract a GST invoice</h1>
-        <p class="lede">Upload a PDF or image. Document AI reads it with your custom schema, then the header and line items show up in the tables below.</p>
+        <h1>Extract a document</h1>
+        <p class="lede">Choose a schema, then upload a PDF or image. Document AI reads the header and line items for that schema.</p>
       </div>
       <button type="button" class="btn" id="open-guide">Setup guide</button>
     </div>
@@ -42,18 +42,29 @@
           <svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
             <path fill="#0070f2" d="M24 6l10 10h-6v12h-8V16h-6l10-10zm-14 26h28v6H10v-6z" opacity=".9"/>
           </svg>
-          <p class="drop-title">Drop an invoice here</p>
+          <p class="drop-title">Drop a document here</p>
           <p class="drop-sub">PDF, PNG, JPEG, or TIFF · up to 20 MB</p>
           <input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,application/pdf,image/png,image/jpeg,image/tiff" hidden />
         </div>
         <div class="upload-side">
           <h2 id="upload-title">Document</h2>
+          <label class="schema-picker" for="schema-list">Schema
+            <select id="schema-list">
+              <option value="local">Loading schemas…</option>
+            </select>
+          </label>
+          <label class="check" for="show-sap">
+            <input id="show-sap" type="checkbox" />
+            Show SAP standard schemas
+          </label>
+          <p id="schema-list-note" class="hint">Schemas configured in Document AI appear here after the service key is set.</p>
           <p id="file-meta" class="file-meta">No file selected.</p>
           <p id="connection" class="status-pill">Checking service key…</p>
           <div class="actions">
-            <button type="button" class="btn btn-emphasized" id="extract">Extract invoice</button>
+            <button type="button" class="btn btn-emphasized" id="extract">Extract document</button>
             <button type="button" class="btn" id="sample">Preview sample</button>
             <button type="button" class="btn" id="probe">Test connection</button>
+            <button type="button" class="btn" id="refresh-schemas">Refresh list</button>
           </div>
           <details class="advanced" id="advanced">
             <summary>Request options</summary>
@@ -154,6 +165,10 @@
         <li>
           <strong>Activate the schema, and a template if the fields are manual.</strong>
           Schema Configuration must show the schema as active. The first activated version is <code>1</code>. Custom documents usually use setup type <code>manual</code>, which only returns values after you create and activate a template for a sample invoice. Put that template name in Request options.
+        </li>
+        <li>
+          <strong>Choose the schema from the list.</strong>
+          After the service key works, Refresh list calls Document AI and fills the Schema menu with every schema in that subaccount. Invoice and letter of credit are separate entries. Pick one before you upload. SAP standard schemas stay hidden until you tick Show SAP standard schemas.
         </li>
         <li>
           <strong>Point the columns at your export.</strong>

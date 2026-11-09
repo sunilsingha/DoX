@@ -208,6 +208,7 @@ function normalizeSchema(raw) {
     lineItemFields = split.lineItemFields;
   }
   const schema = {
+    id: root.id || root.schemaId || '',
     name: root.name || root.schemaName || 'ZSFL_GST_Invoice',
     description: root.schemaDescription || root.description || versionNode.description || '',
     documentType: root.documentType || versionNode.documentType || 'custom',
@@ -595,6 +596,128 @@ async function extractLive({ buffer, filename, mediaType, options }) {
   );
 }
 
+function schemaRecords(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+  return payload.results || payload.schemas || payload.value || [];
+}
+
+function versionOf(schema) {
+  const versions = schema.versions || schema.schemaVersions || [];
+  if (!versions.length) {
+    return {
+      version: String(schema.version || schema.schemaVersion || '1'),
+      status: String(schema.status || '')
+    };
+  }
+  const active = versions.find(version => String(version.status || '').toLowerCase() === 'active');
+  const chosen = active || versions[versions.length - 1];
+  return {
+    version: String(chosen.version || chosen.schemaVersion || '1'),
+    status: String(chosen.status || '')
+  };
+}
+
+function summarizeSchemaEntry(schema) {
+  const version = versionOf(schema);
+  const name = schema.name || schema.schemaName || '';
+  return {
+    id: schema.id || schema.schemaId || '',
+    name,
+    description: schema.description || schema.schemaDescription || '',
+    documentType: schema.documentType || 'custom',
+    clientId: schema.clientId || 'default',
+    version: version.version,
+    status: version.status,
+    standard: /^SAP_/i.test(name)
+  };
+}
+
+function summarizeSchemaList(payload) {
+  return schemaRecords(payload).map(summarizeSchemaEntry).filter(item => item.name);
+}
+
+async function documentAiGet(config, token, resourcePath, params) {
+  let response;
+  try {
+    response = await axios.get(`${config.apiUrl.replace(/\/+$/, '')}${resourcePath}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      params,
+      timeout: 20000,
+      validateStatus: () => true
+    });
+  } catch (error) {
+    throw new DocumentAiError(`Could not reach Document AI. ${error.message}`, 502);
+  }
+  if (response.status !== 200) {
+    throw new DocumentAiError(
+      `Document AI schema request failed (${response.status}). ${safeDetail(response.data)}`.trim(),
+      response.status >= 400 && response.status < 500 ? response.status : 502,
+      safeDetail(response.data)
+    );
+  }
+  return response.data;
+}
+
+function requireConfig() {
+  const config = loadConfig();
+  const missing = missingKeys(config);
+  if (missing.length) {
+    throw new DocumentAiError(`Document AI is not configured. Add ${missing.join(', ')} to default-env.json.`, 400);
+  }
+  return config;
+}
+
+async function listRemoteSchemas() {
+  const config = requireConfig();
+  const token = await getToken(config);
+  const seen = new Set();
+  const schemas = [];
+  const limit = 100;
+  for (let page = 0; page < 10; page += 1) {
+    const payload = await documentAiGet(config, token, '/schemas', {
+      clientId: config.doxClient || 'default',
+      limit,
+      offset: page * limit
+    });
+    const batch = summarizeSchemaList(payload);
+    let added = 0;
+    batch.forEach(item => {
+      const key = item.id || `${item.name}@${item.version}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      schemas.push(item);
+      added += 1;
+    });
+    if (added === 0 || batch.length < limit) break;
+  }
+  schemas.sort((left, right) => left.name.localeCompare(right.name));
+  return schemas;
+}
+
+async function getRemoteSchema(schemaId) {
+  if (!schemaId || !/^[A-Za-z0-9-]{8,}$/.test(schemaId)) {
+    throw new DocumentAiError('Choose a schema from the list.', 400);
+  }
+  const config = requireConfig();
+  const token = await getToken(config);
+  const payload = await documentAiGet(config, token, `/schemas/${schemaId}`, {
+    clientId: config.doxClient || 'default'
+  });
+  return normalizeSchema(payload);
+}
+
+function schemaFromRequest(body) {
+  if (!body || !body.schemaJson) return loadSchemaSync();
+  let parsed;
+  try {
+    parsed = JSON.parse(body.schemaJson);
+  } catch (error) {
+    throw new DocumentAiError('The selected schema could not be read.', 400);
+  }
+  return normalizeSchema(parsed);
+}
+
 function requestFile(file) {
   if (!file) return null;
   return { name: file.originalname || '', size: file.size || 0 };
@@ -622,6 +745,25 @@ function registerRoutes(app) {
         return res.json({ ok: true, ...publicStatus() });
       }
       res.json(publicStatus());
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.get('/api/schemas', async (req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      const schemas = await listRemoteSchemas();
+      res.json({ schemas });
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.get('/api/schemas/:schemaId', async (req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(await getRemoteSchema(req.params.schemaId));
     } catch (error) {
       sendError(res, error);
     }
@@ -662,7 +804,7 @@ function registerRoutes(app) {
       }
       try {
         res.set('Cache-Control', 'no-store');
-        const schema = loadSchemaSync();
+        const schema = schemaFromRequest(req.body);
         const mode = String(req.body.mode || 'live').toLowerCase();
         const options = buildOptions({
           schema,
@@ -718,6 +860,7 @@ module.exports = {
   buildOptions,
   mergeExtraction,
   publicStatus,
+  summarizeSchemaList,
   registerRoutes,
   sampleLines,
   sampleHeader

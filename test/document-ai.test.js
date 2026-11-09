@@ -6,7 +6,8 @@ const {
   loadSchemaSync,
   buildSampleResult,
   buildOptions,
-  mergeExtraction
+  mergeExtraction,
+  summarizeSchemaList
 } = require('../srv/document-ai');
 
 const schema = loadSchemaSync();
@@ -84,5 +85,32 @@ assert.strictEqual(merged.header.find(field => field.name === 'invoiceNumber').v
 assert.ok(merged.header.some(field => field.name === 'extraNote'));
 assert.strictEqual(merged.lineItems[0].find(cell => cell.name === 'quantity').value, '3');
 assert.strictEqual(merged.lineItems[0].find(cell => cell.name === 'description').value, 'Bearing');
+
+const listed = summarizeSchemaList({
+  results: [
+    {
+      id: '11111111-2222-3333-4444-555555555555',
+      name: 'ZSFL_Letter_of_Credit',
+      documentType: 'custom',
+      versions: [
+        { version: '1', status: 'draft' },
+        { schemaVersion: '2', status: 'active' }
+      ]
+    },
+    {
+      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      schemaName: 'SAP_invoice_schema',
+      documentType: 'invoice',
+      version: '1'
+    }
+  ]
+});
+assert.strictEqual(listed.length, 2);
+assert.strictEqual(listed[0].name, 'ZSFL_Letter_of_Credit');
+assert.strictEqual(listed[0].version, '2');
+assert.strictEqual(listed[0].status, 'active');
+assert.strictEqual(listed[0].standard, false);
+assert.strictEqual(listed[1].standard, true);
+assert.strictEqual(listed[1].documentType, 'invoice');
 
 console.log('document-ai tests passed');
