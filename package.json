@@ -16,7 +16,8 @@
     "sqlite3": "^5.0.2"
   },
   "scripts": {
-    "start": "cds run"
+    "start": "cds run",
+    "test": "node test/document-ai.test.js"
   },
   "eslintConfig": {
     "extends": "eslint:recommended",

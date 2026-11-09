@@ -1,0 +1,287 @@
+{
+  "name": "ZSFL_GST_Invoice",
+  "schemaDescription": "Indian GST tax invoice. Header fields cover the supplier, buyer, invoice identity, IRN, and tax totals. Line items cover HSN/SAC, quantity, rate, and CGST/SGST/IGST.",
+  "documentType": "custom",
+  "documentTypeDescription": "GST tax invoice",
+  "version": "1",
+  "placeholder": true,
+  "placeholderReason": "ZSFL_GST_Invoice_schema.json was not in the workspace Downloads folder, so this stand-in follows the SAP schema export shape and a typical GST invoice. Replace this file with your Document AI export, or load that export from the page. Extraction still uses the schema version you activated in BTP.",
+  "headerFields": [
+    {
+      "name": "supplierName",
+      "label": "Supplier name",
+      "description": "Legal name of the supplier",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Supplier"
+    },
+    {
+      "name": "supplierGSTIN",
+      "label": "Supplier GSTIN",
+      "description": "Supplier GST identification number",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Supplier"
+    },
+    {
+      "name": "supplierAddress",
+      "label": "Supplier address",
+      "description": "Supplier billing address",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Supplier"
+    },
+    {
+      "name": "supplierState",
+      "label": "Supplier state",
+      "description": "Supplier state and state code",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Supplier"
+    },
+    {
+      "name": "buyerName",
+      "label": "Buyer name",
+      "description": "Legal name of the buyer",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Buyer"
+    },
+    {
+      "name": "buyerGSTIN",
+      "label": "Buyer GSTIN",
+      "description": "Buyer GST identification number",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Buyer"
+    },
+    {
+      "name": "buyerAddress",
+      "label": "Buyer address",
+      "description": "Buyer billing address",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Buyer"
+    },
+    {
+      "name": "buyerState",
+      "label": "Buyer state",
+      "description": "Buyer state and state code",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Buyer"
+    },
+    {
+      "name": "invoiceNumber",
+      "label": "Invoice number",
+      "description": "Supplier invoice number",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Invoice"
+    },
+    {
+      "name": "invoiceDate",
+      "label": "Invoice date",
+      "description": "Invoice date",
+      "type": "date",
+      "setupType": "manual",
+      "group": "Invoice"
+    },
+    {
+      "name": "placeOfSupply",
+      "label": "Place of supply",
+      "description": "Place of supply and state code",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Invoice"
+    },
+    {
+      "name": "reverseCharge",
+      "label": "Reverse charge",
+      "description": "Whether reverse charge applies",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Invoice"
+    },
+    {
+      "name": "irn",
+      "label": "IRN",
+      "description": "Invoice reference number",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Invoice"
+    },
+    {
+      "name": "ackNumber",
+      "label": "Acknowledgement number",
+      "description": "IRP acknowledgement number",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Invoice"
+    },
+    {
+      "name": "ackDate",
+      "label": "Acknowledgement date",
+      "description": "IRP acknowledgement date",
+      "type": "date",
+      "setupType": "manual",
+      "group": "Invoice"
+    },
+    {
+      "name": "taxableValue",
+      "label": "Taxable value",
+      "description": "Total taxable value before tax",
+      "type": "number",
+      "setupType": "manual",
+      "group": "Tax"
+    },
+    {
+      "name": "cgstAmount",
+      "label": "CGST amount",
+      "description": "Total central GST",
+      "type": "number",
+      "setupType": "manual",
+      "group": "Tax"
+    },
+    {
+      "name": "sgstAmount",
+      "label": "SGST amount",
+      "description": "Total state GST",
+      "type": "number",
+      "setupType": "manual",
+      "group": "Tax"
+    },
+    {
+      "name": "igstAmount",
+      "label": "IGST amount",
+      "description": "Total integrated GST",
+      "type": "number",
+      "setupType": "manual",
+      "group": "Tax"
+    },
+    {
+      "name": "roundOff",
+      "label": "Round off",
+      "description": "Round-off amount",
+      "type": "number",
+      "setupType": "manual",
+      "group": "Tax"
+    },
+    {
+      "name": "invoiceTotal",
+      "label": "Invoice total",
+      "description": "Grand total including tax",
+      "type": "number",
+      "setupType": "manual",
+      "group": "Tax"
+    },
+    {
+      "name": "currencyCode",
+      "label": "Currency",
+      "description": "ISO currency code",
+      "type": "string",
+      "setupType": "manual",
+      "group": "Tax"
+    }
+  ],
+  "lineItemFields": [
+    {
+      "name": "serialNumber",
+      "label": "#",
+      "description": "Line number",
+      "type": "string",
+      "setupType": "manual"
+    },
+    {
+      "name": "description",
+      "label": "Description",
+      "description": "Item or service description",
+      "type": "string",
+      "setupType": "manual"
+    },
+    {
+      "name": "hsnSac",
+      "label": "HSN / SAC",
+      "description": "HSN or SAC code",
+      "type": "string",
+      "setupType": "manual"
+    },
+    {
+      "name": "quantity",
+      "label": "Quantity",
+      "description": "Quantity",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "unitOfMeasure",
+      "label": "UoM",
+      "description": "Unit of measure",
+      "type": "string",
+      "setupType": "manual"
+    },
+    {
+      "name": "unitPrice",
+      "label": "Rate",
+      "description": "Rate per unit",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "taxableAmount",
+      "label": "Taxable value",
+      "description": "Taxable line amount",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "cgstRate",
+      "label": "CGST %",
+      "description": "CGST rate",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "cgstAmount",
+      "label": "CGST",
+      "description": "CGST amount",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "sgstRate",
+      "label": "SGST %",
+      "description": "SGST rate",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "sgstAmount",
+      "label": "SGST",
+      "description": "SGST amount",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "igstRate",
+      "label": "IGST %",
+      "description": "IGST rate",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "igstAmount",
+      "label": "IGST",
+      "description": "IGST amount",
+      "type": "number",
+      "setupType": "manual"
+    },
+    {
+      "name": "lineTotal",
+      "label": "Line total",
+      "description": "Line total including tax",
+      "type": "number",
+      "setupType": "manual"
+    }
+  ]
+}

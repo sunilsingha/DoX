@@ -3,6 +3,7 @@ _out
 *.db
 connection.properties
 default-*.json
+!default-env.sample.json
 .cdsrc-private.json
 gen/
 node_modules/
