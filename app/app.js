@@ -92,10 +92,8 @@
   }
 
   async function loadSchemaChoices() {
-    const clientId = document.getElementById('dox-client').value.trim();
-    const query = clientId ? `?clientId=${encodeURIComponent(clientId)}` : '';
     try {
-      const response = await fetch(`/api/schemas${query}`);
+      const response = await fetch('/api/schemas');
       const body = await readJson(response);
       fillSchemaSelect(body.schemas || [], state.schema && state.schema.name);
     } catch (error) {
@@ -143,14 +141,12 @@
     document.getElementById('schema-version').value = option.dataset.version || '';
     setDocumentType(option.dataset.documentType || 'custom');
     if (state.schema && state.schema.name === option.value) return;
-    const clientId = document.getElementById('dox-client').value.trim();
-    const query = clientId ? `?clientId=${encodeURIComponent(clientId)}` : '';
     setBusy(true);
     try {
-      const response = await fetch(`/api/schemas/${encodeURIComponent(option.dataset.id)}/use${query}`, { method: 'POST' });
+      const response = await fetch(`/api/schemas/${encodeURIComponent(option.dataset.id)}/use`, { method: 'POST' });
       const schema = await readJson(response);
       applySchema(schema);
-      showMessage('positive', `Loaded ${schema.name}, version ${schema.version}, from Document AI.`);
+      showMessage('positive', `Loaded ${schema.name}, version ${schema.version}.`);
     } catch (error) {
       showMessage('negative', error.message);
     } finally {
@@ -172,9 +168,9 @@
 
   function renderConnection(status) {
     const node = document.getElementById('connection');
-    document.getElementById('dox-client').value = status.doxClient || 'default';
-    if (!document.getElementById('template').value) {
-      document.getElementById('template').value = status.template || '';
+    document.getElementById('resource-group').value = status.resourceGroup || 'default';
+    if (!document.getElementById('deployment-id').value) {
+      document.getElementById('deployment-id').value = status.deploymentId || '';
     }
     node.classList.remove('ready', 'warn', 'bad');
     if (status.configured) {
@@ -229,8 +225,8 @@
     if (isTiff || (!isPdf && !isImage)) {
       unsupported.hidden = false;
       unsupported.textContent = isTiff
-        ? 'This browser cannot display TIFF files. The file is still sent to Document AI.'
-        : 'This file cannot be previewed here. It is still sent to Document AI.';
+        ? 'TIFF is not shown here, and SAP AI Core vision models do not accept it. Export the page as PNG or JPEG.'
+        : 'This file cannot be previewed here. Upload a PDF, PNG, or JPEG.';
       return;
     }
     previewUrl = URL.createObjectURL(file);
@@ -247,7 +243,7 @@
     image.onerror = () => {
       image.hidden = true;
       unsupported.hidden = false;
-      unsupported.textContent = 'This image could not be previewed. The file is still sent to Document AI.';
+      unsupported.textContent = 'This image could not be previewed. Upload a PNG or JPEG.';
     };
     image.src = previewUrl;
     image.hidden = false;
@@ -280,13 +276,13 @@
     form.set('schemaName', document.getElementById('schema-name').value.trim());
     form.set('schemaVersion', document.getElementById('schema-version').value.trim());
     form.set('documentType', document.getElementById('document-type').value);
-    form.set('doxClient', document.getElementById('dox-client').value.trim());
-    form.set('template', document.getElementById('template').value.trim());
+    form.set('resourceGroup', document.getElementById('resource-group').value.trim());
+    form.set('deploymentId', document.getElementById('deployment-id').value.trim());
     if (file) form.set('file', file);
     setBusy(true);
     showMessage('information', mode === 'sample'
       ? 'Filling the tables with a sample GST invoice.'
-      : 'Uploading the invoice and waiting for Document AI.');
+      : 'Uploading the invoice and waiting for SAP AI Core.');
     try {
       const response = await fetch('/api/extract', { method: 'POST', body: form });
       const body = await readJson(response);
@@ -308,12 +304,12 @@
     renderLines();
     const filled = hasValues(result);
     if (result.mode === 'sample') {
-      showMessage('information', 'Sample invoice only. Document AI was not called. Header and line items below use the schema columns.');
+      showMessage('information', 'Sample invoice only. SAP AI Core was not called. Header and line items below use the schema columns.');
       return;
     }
     const job = result.jobId ? ` Job ${result.jobId}.` : '';
     if (!filled) {
-      showMessage('critical', `Document AI finished with no values.${job} If the schema uses manual setup, add the activated template name and extract again.`);
+      showMessage('critical', `SAP AI Core finished with no values.${job} Check that the model can read the file and that the schema fields match the invoice.`);
       return;
     }
     showMessage('positive', `Extraction ${result.status}.${job}`);
