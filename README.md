@@ -56,9 +56,9 @@ Open SAP AI Launchpad with a user that has `mloperations_editor` or `genai_manag
 
 Deploy the model itself. An orchestration deployment is a different endpoint. This app calls the model deployment's chat completions API, not orchestration.
 
-The executable lists every model that provider can run, including `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`. A deployment still serves only the `modelName` saved on its configuration. To change models from the page, create one configuration and one RUNNING deployment per model. The Model menu reads those deployments and sends the invoice to the one you pick. Configured deployment keeps using `AICORE_DEPLOYMENT_ID`. Embedding and realtime models are not offered for extraction. A model shown as not deployed needs its own configuration before it can be selected.
+The executable lists every model that provider can run, including `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`. A deployment still serves only the `modelName` saved on its configuration. To change models from the page, create one configuration and one RUNNING deployment per model. The Model menu lists only those running chat deployments. Embedding, realtime, and undeployed models are left out.
 
-Gemini chat models use the same menu and a separate deployment ID. Keep the GPT deployment in `AICORE_DEPLOYMENT_ID`. Put the Gemini deployment in `AICORE_GEMINI_DEPLOYMENT_ID`, and set `AICORE_GEMINI_MODEL` to the deployed model name, usually `gemini-2.5-flash`. The Model menu shows both IDs. Picking Gemini calls that deployment's `generateContent` endpoint. A deployment whose model is `gemini-embedding` appears as embedding only. It creates vectors and cannot read an invoice.
+Gemini chat models use the same menu and a separate deployment ID. Keep the GPT deployment in `AICORE_DEPLOYMENT_ID`. Put the Gemini deployment in `AICORE_GEMINI_DEPLOYMENT_ID`, and set `AICORE_GEMINI_MODEL` to the deployed model name, usually `gemini-2.5-flash`. The Model menu shows a running Gemini chat deployment beside the GPT deployment. Picking Gemini calls that deployment's `generateContent` endpoint. `gemini-embedding` is not listed, because it cannot read an invoice.
 
 ## 4. Schemas
 

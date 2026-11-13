@@ -75,9 +75,8 @@ const catalog = joinModelCatalog({
   supportedNames: supported
 });
 assert.ok(catalog.some(item => item.modelName === 'gpt-4o-mini' && item.deployed && item.usable && item.deploymentId === 'dep-mini'));
-assert.ok(catalog.some(item => item.modelName === 'gpt-4o' && item.deployed === false));
-const embedding = catalog.find(item => item.modelName.includes('embedding'));
-assert.ok(embedding && embedding.deployed && embedding.usable === false);
+assert.ok(!catalog.some(item => item.modelName === 'gpt-4o'));
+assert.ok(!catalog.some(item => item.modelName.includes('embedding')));
 assert.ok(!catalog.some(item => item.modelName.includes('realtime')));
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', '').deploymentId, 'dep-mini');
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', 'other-deployment'), null);
@@ -116,13 +115,9 @@ const geminiCatalog = joinModelCatalog({
     { modelName: 'gemini-embedding', executableId: 'gcp-vertexai' }
   ]
 });
-const geminiEmbedding = geminiCatalog.find(item => item.modelName === 'gemini-embedding');
-assert.strictEqual(geminiEmbedding.deploymentId, 'da00bb108e5cec61');
-assert.strictEqual(geminiEmbedding.usable, false);
-assert.strictEqual(providerFor(geminiEmbedding), 'gemini');
-const flash = geminiCatalog.find(item => item.modelName === 'gemini-2.5-flash');
-assert.strictEqual(flash.deployed, false);
-assert.strictEqual(flash.executableId, 'gcp-vertexai');
+assert.ok(!geminiCatalog.some(item => item.modelName === 'gemini-embedding'));
+assert.ok(!geminiCatalog.some(item => item.modelName === 'gemini-2.5-flash'));
+assert.strictEqual(providerFor({ modelName: 'gemini-2.5-flash', executableId: 'gcp-vertexai' }), 'gemini');
 const geminiBody = geminiPayload([
   { type: 'text', text: 'Extract' },
   { type: 'file', file: { file_data: 'data:application/pdf;base64,JVBERg==' } }

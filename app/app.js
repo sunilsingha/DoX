@@ -230,35 +230,34 @@
   function localGemini() {
     const deploymentId = document.getElementById('gemini-deployment-id').value.trim();
     const modelName = document.getElementById('gemini-model').value.trim() || 'gemini-2.5-flash';
-    if (!deploymentId) return null;
-    const embedding = modelName.toLowerCase().includes('embed');
+    if (!deploymentId || modelName.toLowerCase().includes('embed')) return null;
     return {
       modelName,
       modelVersion: 'latest',
       deploymentId,
       executableId: 'gcp-vertexai',
       deployed: true,
-      usable: !embedding,
-      reason: embedding ? `${modelName} is an embedding model. It cannot read an invoice.` : ''
+      usable: true,
+      reason: ''
     };
   }
 
   function modelsForMenu(models) {
     const list = (models || []).map(item => ({ ...item }));
     const gemini = localGemini();
-    if (!gemini) return list;
-    const existing = list.find(item => item.deploymentId === gemini.deploymentId);
-    if (existing) {
-      existing.modelName = gemini.modelName;
-      existing.executableId = 'gcp-vertexai';
-      existing.deployed = true;
-      existing.usable = gemini.usable;
-      existing.reason = gemini.reason;
-      return list;
+    if (gemini) {
+      const existing = list.find(item => item.deploymentId === gemini.deploymentId);
+      if (existing) {
+        existing.modelName = gemini.modelName;
+        existing.executableId = 'gcp-vertexai';
+        existing.deployed = true;
+        existing.usable = true;
+        existing.reason = '';
+      } else {
+        list.unshift(gemini);
+      }
     }
-    const suggestion = list.findIndex(item => !item.deployed && item.modelName.toLowerCase() === gemini.modelName.toLowerCase());
-    if (suggestion >= 0) list.splice(suggestion, 1);
-    return [gemini, ...list];
+    return list.filter(item => item.deployed && item.usable !== false);
   }
 
   function applyModelChoice() {
@@ -273,26 +272,23 @@
     const current = previous != null ? previous : select.value;
     const menu = modelsForMenu(models);
     select.replaceChildren();
-    const fallback = document.createElement('option');
     const gptId = document.getElementById('deployment-id').value.trim();
-    fallback.value = 'gpt';
-    fallback.textContent = gptId ? `GPT · ${gptId}` : 'GPT deployment';
-    select.appendChild(fallback);
+    if (gptId) {
+      const fallback = document.createElement('option');
+      fallback.value = 'gpt';
+      fallback.textContent = `GPT · ${gptId}`;
+      select.appendChild(fallback);
+    }
     menu.forEach(model => {
       const option = document.createElement('option');
-      option.value = model.deployed ? model.deploymentId : `unavailable:${model.modelName}`;
-      option.disabled = !model.deployed || model.usable === false;
+      option.value = model.deploymentId;
       option.dataset.modelName = model.modelName;
       option.dataset.deploymentId = model.deploymentId || '';
       option.dataset.executableId = model.executableId || '';
-      const copies = menu.filter(item => item.deployed && item.usable !== false && item.modelName === model.modelName).length;
+      const copies = menu.filter(item => item.modelName === model.modelName).length;
       const version = model.modelVersion && model.modelVersion !== 'latest' ? ` · ${model.modelVersion}` : '';
       const suffix = copies > 1 && model.deploymentId ? ` · ${model.deploymentId.slice(0, 8)}` : '';
-      const blocked = model.deployed && model.usable === false
-        ? (String(model.reason || '').toLowerCase().includes('embedding') ? ' (embedding only)' : ' (cannot extract)')
-        : '';
-      option.title = model.reason || '';
-      option.textContent = model.deployed ? `${model.modelName}${version}${suffix}${blocked}` : `${model.modelName} (not deployed)`;
+      option.textContent = `${model.modelName}${version}${suffix}`;
       select.appendChild(option);
     });
     if ([...select.options].some(option => option.value === current && !option.disabled)) select.value = current;
@@ -310,15 +306,10 @@
       state.models = body.models || [];
       fillModelSelect(state.models, previous === '' ? 'gpt' : previous);
       const shown = modelsForMenu(state.models);
-      const chatRunning = shown.filter(model => model.deployed && model.usable !== false);
-      const blocked = shown.filter(model => model.deployed && model.usable === false);
-      if (chatRunning.length) note.textContent = 'GPT and Gemini keep separate deployment IDs. Pick one in this menu. A model marked embedding only cannot read an invoice.';
-      else if (body.error) note.textContent = body.error;
-      else if (blocked.length) {
-        note.textContent = 'The running Gemini deployment is an embedding model, so it cannot read an invoice. Deploy the gcp-vertexai executable with modelName gemini-2.5-flash and modelVersion latest, then choose that model here.';
-      } else {
-        note.textContent = 'No chat models are running yet. Add the Gemini deployment ID under Request options, or deploy a chat model and refresh.';
-      }
+      if (shown.length || document.getElementById('deployment-id').value.trim()) {
+        note.textContent = 'The menu lists running chat deployments only. GPT and Gemini each use their own deployment ID.';
+      } else if (body.error) note.textContent = body.error;
+      else note.textContent = 'No chat model is deployed yet. Add a GPT or Gemini deployment ID under Request options.';
     } catch (error) {
       fillModelSelect([], '');
       note.textContent = error.message;

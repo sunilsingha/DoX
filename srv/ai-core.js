@@ -437,8 +437,6 @@ function parameterValue(bindings, key) {
   return String(found.value).trim();
 }
 
-const GEMINI_CHAT_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'];
-
 function modelFromDeployment(deployment) {
   const details = (deployment && deployment.details) || {};
   const resources = details.resources || details;
@@ -499,7 +497,7 @@ function supportedModelNames(executable) {
     .filter(item => item && !/\s/.test(item));
 }
 
-function joinModelCatalog({ configurations, deployments, supportedNames }) {
+function joinModelCatalog({ configurations, deployments }) {
   const configs = new Map((configurations || []).filter(item => item && item.id).map(item => [item.id, item]));
   const deployed = [];
   (deployments || []).forEach(deployment => {
@@ -511,8 +509,7 @@ function joinModelCatalog({ configurations, deployments, supportedNames }) {
     const modelVersion = parameterValue(bindings, 'modelVersion') || fromDetails.modelVersion || 'latest';
     const scenarioId = configuration.scenarioId || deployment.scenarioId || '';
     if (scenarioId && scenarioId !== 'foundation-models') return;
-    const role = modelRole(modelName);
-    if (role === 'unknown' || role === 'other') return;
+    if (!isChatModel(modelName)) return;
     const use = modelUse(modelName);
     deployed.push({
       modelName,
@@ -525,28 +522,7 @@ function joinModelCatalog({ configurations, deployments, supportedNames }) {
       reason: use.reason
     });
   });
-  const seen = new Set(deployed.map(item => item.modelName.toLowerCase()));
-  const missing = [];
-  (supportedNames || []).forEach(entry => {
-    const modelName = String((entry && entry.modelName) || entry || '').trim();
-    const executableId = (entry && entry.executableId) || (providerFor(modelName) === 'gemini' ? 'gcp-vertexai' : 'azure-openai');
-    if (!isChatModel(modelName) || seen.has(modelName.toLowerCase())) return;
-    seen.add(modelName.toLowerCase());
-    missing.push({
-      modelName,
-      modelVersion: 'latest',
-      deploymentId: '',
-      executableId,
-      configurationName: '',
-      deployed: false,
-      usable: false,
-      reason: ''
-    });
-  });
-  return deployed.concat(missing).sort((left, right) => {
-    if (left.deployed !== right.deployed) return left.deployed ? -1 : 1;
-    return left.modelName.localeCompare(right.modelName);
-  });
+  return deployed.sort((left, right) => left.modelName.localeCompare(right.modelName));
 }
 
 function configuredGemini(config) {
@@ -711,51 +687,13 @@ async function hydrateConfigurations(config, token, group, deployments, listed) 
   return [...byId.values()];
 }
 
-async function readExecutableModels(config, token, group, executableId) {
-  try {
-    const executable = await aiCoreGet(config, token, group, `/v2/lm/scenarios/foundation-models/executables/${encodeURIComponent(executableId)}`);
-    return supportedModelNames(executable).map(modelName => ({ modelName, executableId }));
-  } catch (error) {
-    return [];
-  }
-}
-
-async function readSupportedModels(config, token, group) {
-  const listed = (await Promise.all([
-    readExecutableModels(config, token, group, 'azure-openai'),
-    readExecutableModels(config, token, group, 'gcp-vertexai')
-  ])).flat();
-  if (listed.length) return withGeminiSuggestions(listed);
-  try {
-    const data = await aiCoreGet(config, token, group, '/v2/lm/scenarios/foundation-models/executables');
-    const list = data.resources || data.executables || [];
-    const names = ['azure-openai', 'gcp-vertexai'].flatMap(executableId => {
-      const match = list.find(item => String((item && (item.id || item.name)) || '').toLowerCase() === executableId) || {};
-      return supportedModelNames(match).map(modelName => ({ modelName, executableId }));
-    });
-    return withGeminiSuggestions(names);
-  } catch (error) {
-    return withGeminiSuggestions([]);
-  }
-}
-
-function withGeminiSuggestions(names) {
-  const list = (names || []).slice();
-  const hasGeminiChat = list.some(item => isChatModel(item.modelName) && providerFor(item) === 'gemini');
-  if (!hasGeminiChat) {
-    GEMINI_CHAT_MODELS.forEach(modelName => list.push({ modelName, executableId: 'gcp-vertexai' }));
-  }
-  return list;
-}
-
 async function loadCatalog(config, token, group) {
-  const [configurations, deployments, supportedNames] = await Promise.all([
+  const [configurations, deployments] = await Promise.all([
     listResources(config, token, group, '/v2/lm/configurations', { scenarioId: 'foundation-models' }),
-    listResources(config, token, group, '/v2/lm/deployments', { scenarioId: 'foundation-models', status: 'RUNNING' }),
-    readSupportedModels(config, token, group)
+    listResources(config, token, group, '/v2/lm/deployments', { scenarioId: 'foundation-models', status: 'RUNNING' })
   ]);
   const hydrated = await hydrateConfigurations(config, token, group, deployments, configurations);
-  return joinModelCatalog({ configurations: hydrated, deployments, supportedNames });
+  return joinModelCatalog({ configurations: hydrated, deployments });
 }
 
 async function listChatModels({ resourceGroup } = {}) {
