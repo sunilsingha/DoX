@@ -1,11 +1,9 @@
 {
-  "DOX_UAA_URL": "https://<subdomain>.authentication.<region>.hana.ondemand.com",
-  "DOX_UAA_CLIENTID": "<uaa.clientid from the service key>",
-  "DOX_UAA_CLIENTSECRET": "<uaa.clientsecret from the service key>",
-  "DOX_URL": "https://<service-host>/document-information-extraction/v1",
-  "DOX_CLIENT": "default",
-  "DOX_SCHEMA_NAME": "ZSFL_GST_Invoice",
-  "DOX_SCHEMA_VERSION": "1",
-  "DOX_DOCUMENT_TYPE": "custom",
-  "DOX_TEMPLATE": ""
+  "AICORE_AUTH_URL": "https://<subdomain>.authentication.<region>.hana.ondemand.com",
+  "AICORE_CLIENT_ID": "<clientid from the SAP AI Core service key>",
+  "AICORE_CLIENT_SECRET": "<clientsecret from the SAP AI Core service key>",
+  "AICORE_BASE_URL": "https://api.ai.<landscape>.<region>.aws.ml.hana.ondemand.com",
+  "AICORE_RESOURCE_GROUP": "default",
+  "AICORE_DEPLOYMENT_ID": "<deployment id of the running foundation model>",
+  "AICORE_API_VERSION": "2023-05-15"
 }

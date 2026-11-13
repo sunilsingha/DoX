@@ -304,8 +304,8 @@ input:focus, select:focus, button:focus-visible, .dropzone:focus-visible {
   overflow: hidden;
 }
 
-.preview-frame iframe,
-.preview-frame img {
+.preview-frame img,
+.preview-pages {
   position: absolute;
   inset: 0;
   display: block;
@@ -315,10 +315,31 @@ input:focus, select:focus, button:focus-visible, .dropzone:focus-visible {
   background: #fff;
 }
 
-.preview-frame iframe[hidden],
-.preview-frame img[hidden] { display: none; }
+.preview-frame img[hidden],
+.preview-pages[hidden] { display: none; }
 
 .preview-frame img { object-fit: contain; }
+
+.preview-pages {
+  overflow: auto;
+  background: #eaecee;
+  padding: 0.75rem;
+}
+
+.preview-pages canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 auto 0.75rem;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(34, 53, 72, 0.16);
+}
+
+.preview-status {
+  margin: 2rem 1rem;
+  color: var(--sapLabelColor);
+  text-align: center;
+}
 
 .preview-empty {
   margin: 0;

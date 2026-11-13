@@ -6,6 +6,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const express = require('express');
 const multer = require('multer');
+const aiCore = require('./ai-core');
 
 const SCHEMA_FILE = 'schema/ZSFL_GST_Invoice_schema.json';
 const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.tif', '.tiff']);
@@ -139,16 +140,9 @@ function missingKeys(config) {
 }
 
 function publicStatus() {
-  const config = loadConfig();
-  const missing = missingKeys(config);
   return {
-    configured: missing.length === 0,
-    missing,
-    tokenHost: hostOf(config.tokenUrl),
-    apiHost: hostOf(config.apiUrl),
-    doxClient: config.doxClient || 'default',
-    template: config.template || '',
-    schemaFile: SCHEMA_FILE
+    ...aiCore.publicStatus(),
+    schemaFile: path.relative(projectRoot(), activeSchemaPath())
   };
 }
 
@@ -224,24 +218,82 @@ function normalizeSchema(raw) {
   return schema;
 }
 
-function loadSchemaSync() {
-  const file = schemaPath();
-  if (!fs.existsSync(file)) {
-    throw new DocumentAiError(`Schema file not found at ${SCHEMA_FILE}.`, 500);
+function schemaDir() {
+  return path.join(projectRoot(), 'schema');
+}
+
+function activeSchemaPath() {
+  const pointer = path.join(schemaDir(), '.active');
+  if (fs.existsSync(pointer)) {
+    const selected = path.basename(fs.readFileSync(pointer, 'utf8').trim());
+    const full = path.join(schemaDir(), selected);
+    if (selected.endsWith('.json') && fs.existsSync(full)) return full;
   }
+  return schemaPath();
+}
+
+function readSchemaFile(file) {
   let raw;
   try {
     raw = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
-    throw new DocumentAiError(`${SCHEMA_FILE} is not valid JSON.`, 500);
+    throw new DocumentAiError(`${path.basename(file)} is not valid JSON.`, 500);
   }
-  return normalizeSchema(raw);
+  return { raw, normalized: normalizeSchema(raw) };
+}
+
+function loadSchemaSync() {
+  const file = activeSchemaPath();
+  if (!fs.existsSync(file)) {
+    throw new DocumentAiError(`Schema file not found at ${SCHEMA_FILE}.`, 500);
+  }
+  return readSchemaFile(file).normalized;
+}
+
+function listLocalSchemas() {
+  const dir = schemaDir();
+  if (!fs.existsSync(dir)) return [];
+  const choices = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const { raw, normalized } = readSchemaFile(path.join(dir, name));
+      choices.push({
+        id: raw.id || name,
+        name: normalized.name,
+        documentType: normalized.documentType,
+        version: normalized.version,
+        state: raw.state || 'local',
+        file: name
+      });
+    } catch (error) {
+      /* skip a schema file that cannot be read */
+    }
+  }
+  return choices.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function rememberActive(filename) {
+  fs.writeFileSync(path.join(schemaDir(), '.active'), `${filename}\n`);
+}
+
+function activateLocalSchema(id) {
+  const match = listLocalSchemas().find(item => item.id === id || item.file === id || item.name === id);
+  if (!match) throw new DocumentAiError('Choose a schema from the list.', 400);
+  rememberActive(match.file);
+  return loadSchemaSync();
 }
 
 function saveSchema(raw) {
   const normalized = normalizeSchema(raw);
-  fs.mkdirSync(path.dirname(schemaPath()), { recursive: true });
-  fs.writeFileSync(schemaPath(), `${JSON.stringify(raw, null, 2)}\n`);
+  const dir = schemaDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const existing = listLocalSchemas().find(item => item.id === raw.id || item.name === normalized.name);
+  const filename = existing
+    ? existing.file
+    : `${normalized.name.replace(/[^A-Za-z0-9._-]+/g, '_')}_schema.json`;
+  fs.writeFileSync(path.join(dir, filename), `${JSON.stringify(raw, null, 2)}\n`);
+  rememberActive(filename);
   return normalized;
 }
 
@@ -715,6 +767,11 @@ function requestFile(file) {
 }
 
 function registerRoutes(app) {
+  const pdfjsRoot = path.join(projectRoot(), 'node_modules', 'pdfjs-dist');
+  app.use('/vendor/pdfjs/standard_fonts', express.static(path.join(pdfjsRoot, 'standard_fonts')));
+  app.use('/vendor/pdfjs/cmaps', express.static(path.join(pdfjsRoot, 'cmaps')));
+  app.use('/vendor/pdfjs', express.static(path.join(pdfjsRoot, 'build')));
+
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 20 * 1024 * 1024 }
@@ -724,15 +781,15 @@ function registerRoutes(app) {
     try {
       res.set('Cache-Control', 'no-store');
       if (req.query.probe === '1') {
-        const config = loadConfig();
-        const missing = missingKeys(config);
+        const config = aiCore.loadConfig();
+        const missing = aiCore.missingKeys(config);
         if (missing.length) {
           return res.status(400).json({
             ok: false,
             error: `Add these to default-env.json: ${missing.join(', ')}.`
           });
         }
-        await getToken(config);
+        await aiCore.getToken(config);
         return res.json({ ok: true, ...publicStatus() });
       }
       res.json(publicStatus());
@@ -741,20 +798,19 @@ function registerRoutes(app) {
     }
   });
 
-  app.get('/api/schemas', async (req, res) => {
+  app.get('/api/schemas', (req, res) => {
     try {
       res.set('Cache-Control', 'no-store');
-      const schemas = await listCustomSchemas(req.query.clientId);
-      res.json({ schemas });
+      res.json({ schemas: listLocalSchemas() });
     } catch (error) {
       sendError(res, error);
     }
   });
 
-  app.post('/api/schemas/:id/use', async (req, res) => {
+  app.post('/api/schemas/:id/use', (req, res) => {
     try {
       res.set('Cache-Control', 'no-store');
-      res.json(await useRemoteSchema(req.params.id, req.query.clientId));
+      res.json(activateLocalSchema(req.params.id));
     } catch (error) {
       sendError(res, error);
     }
@@ -797,36 +853,35 @@ function registerRoutes(app) {
         res.set('Cache-Control', 'no-store');
         const schema = loadSchemaSync();
         const mode = String(req.body.mode || 'live').toLowerCase();
-        const options = buildOptions({
-          schema,
-          doxClient: req.body.doxClient || loadConfig().doxClient,
-          template: req.body.template || loadConfig().template,
-          schemaName: req.body.schemaName || loadConfig().schemaName || schema.name,
-          schemaVersion: req.body.schemaVersion || loadConfig().schemaVersion || schema.version,
-          documentType: req.body.documentType || loadConfig().documentType || schema.documentType
-        });
         if (mode === 'sample') {
           return res.json(buildSampleResult(schema, req.file));
         }
         if (!req.file) {
           return res.status(400).json({ error: 'Choose an invoice file first, or preview the sample.' });
         }
-        const live = await extractLive({
+        const live = await aiCore.extractDocument({
           buffer: req.file.buffer,
           filename: req.file.originalname,
-          mediaType: req.file.mimetype,
-          options
+          schema,
+          resourceGroup: req.body.resourceGroup,
+          deploymentId: req.body.deploymentId
         });
-        const merged = mergeExtraction(schema, live.payload);
         return res.json({
           mode: 'live',
-          jobId: live.jobId,
-          status: live.status,
+          jobId: null,
+          status: 'DONE',
           file: requestFile(req.file),
           schema: schemaSummary(schema),
-          request: { options },
-          header: merged.header,
-          lineItems: merged.lineItems
+          request: {
+            options: {
+              schemaName: schema.name,
+              schemaVersion: schema.version,
+              deploymentId: live.deploymentId,
+              resourceGroup: live.resourceGroup
+            }
+          },
+          header: live.header,
+          lineItems: live.lineItems
         });
       } catch (error) {
         return sendError(res, error);
@@ -838,7 +893,7 @@ function registerRoutes(app) {
 function sendError(res, error) {
   const status = error.status || 500;
   res.status(status).json({
-    error: error.message || 'Document AI request failed.',
+    error: error.message || 'The extraction request failed.',
     detail: error.detail || ''
   });
 }
@@ -852,6 +907,7 @@ module.exports = {
   mergeExtraction,
   publicStatus,
   customSchemaChoices,
+  listLocalSchemas,
   registerRoutes,
   sampleLines,
   sampleHeader

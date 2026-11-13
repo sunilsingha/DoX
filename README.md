@@ -1,53 +1,68 @@
-# GST invoice extraction
+# Invoice extraction with SAP AI Core
 
-A Fiori Horizon style page for SAP BTP Document AI. Upload a GST invoice and review the header and line items in tables. The columns come from `schema/ZSFL_GST_Invoice_schema.json`.
+A Fiori Horizon style page that sends an invoice to a model deployed in SAP AI Core and shows the header and line items in tables. The columns come from the schema JSON files in `schema/`. The GST schema is `schema/ZSFL_GST_Invoice_schema.json`.
 
-The export named `ZSFL_GST_Invoice_schema.json` was not in this workspace, so the schema file is a stand-in in the SAP export shape. Replace it with your export. Preview sample works before a service key is configured and does not call BTP.
+SAP AI Core does not store Document AI schemas. The same schema export is the contract: the app puts those field names in the prompt, and the tables render whatever the model returns. Preview sample works before a service key is configured and does not call SAP AI Core.
 
-## 1. Service instance
+## 1. Entitle the extended plan
 
-In the subaccount where you subscribed to Document AI:
+Generative AI Hub is available on the SAP AI Core **extended** plan. The free and standard plans do not include it.
 
-1. Open Instances and Subscriptions.
-2. Create a service instance of Document Information Extraction (the runtime behind Document AI) if you do not already have one.
-3. Create a service key and open it.
+1. Open the global account and go to Entitlements.
+2. Choose Configure Entitlements, then Add Service Plans.
+3. Select SAP AI Core and the `extended` plan, then assign it to the subaccount you will use.
+4. Also entitle SAP AI Launchpad and subscribe to it in that subaccount. The booster under Boosters does both the subscription and the AI Core instance.
 
-You need four values:
+## 2. Create the service instance and service key
+
+1. In the subaccount, open Instances and Subscriptions.
+2. Create a service instance of SAP AI Core with plan `extended` if the booster did not create one.
+3. Create a service key and download it.
+
+Copy these fields into `default-env.json`:
 
 | Service key | `default-env.json` |
 | --- | --- |
-| `uaa.url` | `DOX_UAA_URL` |
-| `uaa.clientid` | `DOX_UAA_CLIENTID` |
-| `uaa.clientsecret` | `DOX_UAA_CLIENTSECRET` |
-| `url` | `DOX_URL` |
-
-The Document AI UI, where the schema was created, is the subscription. This app calls the service instance.
-
-## 2. Local credentials
+| `url` | `AICORE_AUTH_URL` |
+| `clientid` | `AICORE_CLIENT_ID` |
+| `clientsecret` | `AICORE_CLIENT_SECRET` |
+| `serviceurls.AI_API_URL` | `AICORE_BASE_URL` |
 
 ```bash
 cp default-env.sample.json default-env.json
 ```
 
-Fill in the service key. `default-env.json` is gitignored. On Cloud Foundry the app reads the same fields from `VCAP_SERVICES`.
+`default-env.json` is gitignored. On Cloud Foundry the app reads the same fields from a service binding whose label contains `aicore`. Do not commit the client secret.
 
-`DOX_CLIENT` is the Document AI client inside the extraction options. Trial and most subaccounts use `default`. It is not the XSUAA client id.
+The instance creates a resource group named `default`. Leave `AICORE_RESOURCE_GROUP` as `default` unless you created another group. A model deployment belongs to one resource group.
 
-The service key that used to be hardcoded in `srv/dox.js` has been removed from the source. Rotate it in BTP if this repository was shared. That trial authentication host currently returns 404, so use a service key from the subaccount you are working in now.
+## 3. Deploy a chat model that can see images
 
-## 3. Schema and template
+Open SAP AI Launchpad with a user that has `mloperations_editor` or `genai_manager`. Those roles are for creating the deployment. The app's service key uses client credentials and does not need them.
 
-In Document AI, open Schema Configuration and confirm `ZSFL_GST_Invoice` is active. The first activated version is `1`. Note the document type. A schema you created as Custom must be sent as `custom`. A copy of the SAP invoice schema is sent as `invoice`.
+1. Select the SAP AI Core runtime and the `default` resource group.
+2. Open ML Operations, then Scenarios. Confirm `foundation-models` is listed. If it is missing, the instance is not on the extended plan.
+3. Open Configurations and create one:
+   - Scenario: `foundation-models`
+   - Version: the latest version shown
+   - Executable: `azure-openai` for GPT models, or the executable Launchpad shows for the provider you chose
+   - Parameter `modelName`: `gpt-4o`
+   - Parameter `modelVersion`: `latest`
+4. Create a deployment from that configuration. Duration: Standard.
+5. Wait until the status is RUNNING.
+6. Copy the deployment ID from the deployment URL into `AICORE_DEPLOYMENT_ID`.
 
-Custom fields with setup type `manual` return values only after you create a template from a sample invoice and activate it. Put that template name in Request options on the page, or in `DOX_TEMPLATE`.
+`gpt-4o` can read a PNG or JPEG. A text-only model cannot read a photo or a scan. `modelVersion` `latest` follows the current model version. SAP Note 3437766 lists available models, versions, and deprecation dates.
 
-Save your export as `schema/ZSFL_GST_Invoice_schema.json`, or use Load schema export on the page. The page uses the file until it can read the live list. BTP extracts with the schema you select.
+Deploy the model itself. An orchestration deployment is a different endpoint. This app calls the model deployment's chat completions API, not orchestration.
 
-## Choose a schema
+## 4. Schemas
 
-When `default-env.json` has a working service key, the Schema menu calls `GET /schemas` and lists the schemas in your Document AI client. Choosing one calls `GET /schemas/{id}` and switches the header and line-item columns to that schema. Invoice and letter of credit are two entries in the same list. Names that start with `SAP_` stay hidden until you tick Show SAP standard schemas.
+Put one JSON export in `schema/` for each document type. The Schema menu lists those files. Choosing one loads its header and line-item columns and uses that field list in the prompt. The GST invoice and a letter of credit are two files. The model does not decide which schema to use.
 
-## 4. Run
+Use Load schema export on the page to add another file, or copy the JSON into `schema/` and restart. The active choice is remembered in `schema/.active`, which is gitignored. The default file is `schema/ZSFL_GST_Invoice_schema.json`.
+
+## 5. Run
 
 ```bash
 npm install
@@ -56,46 +71,44 @@ npm start
 
 Open http://localhost:4004.
 
-Keep this page on your machine while you are learning. It can spend your Document AI quota, and it is not protected by a login.
+Keep this page on your machine while you are learning. Each extraction calls the deployed model and can spend quota. The page is not protected by a login.
 
-Use Test connection before the first invoice. A success message means XSUAA accepted the service key.
+Use Test connection before the first invoice. A success message means the service key was accepted.
 
-## 5. Extract
+## 6. Extract
 
-1. Drop a PDF, PNG, JPEG, or TIFF invoice on the page. Trial extraction is most reliable with a PDF or a single-page PNG or JPEG, up to 20 MB.
-2. Open Request options and confirm schema name, version, document type, and template.
-3. Press Extract invoice.
+1. Choose the schema.
+2. Drop a digital PDF, PNG, or JPEG. Up to 20 MB.
+3. Open Request options if you need a different resource group or deployment ID than the values in `default-env.json`.
+4. Press Extract invoice.
+
+A PDF is sent to the model with the field list, so the model reads the pages itself. If that deployment refuses a PDF attachment, the app reads the text from the file and sends the text instead. A PNG or JPEG is sent as an image. TIFF is not accepted.
 
 The server requests a client-credentials token, then sends:
 
-```json
-{
-  "clientId": "default",
-  "documentType": "custom",
-  "schemaName": "ZSFL_GST_Invoice",
-  "schemaVersion": "1",
-  "templateName": "your-template"
-}
+```text
+POST {AI_API_URL}/v2/inference/deployments/{deploymentId}/chat/completions?api-version=2023-05-15
+Authorization: Bearer <token>
+AI-Resource-Group: default
 ```
 
-`templateName` is omitted until you set one. A template id (a UUID) is sent as `templateId`.
+`AI_API_URL` is the service key value without a trailing `/v2`. The default API version is `2023-05-15`. Set `AICORE_API_VERSION` to `none` to omit the query parameter.
 
-The upload is `POST {service}/document/jobs` as multipart form data with parts `file` and `options`. The page then polls `GET {service}/document/jobs/{id}?extractedValues=true` until the status is `DONE`.
+The model is asked to return JSON shaped as `header` and `lineItems`, keyed by the schema field names. Empty fields stay empty. The model is instructed not to invent GSTINs, totals, or line items.
 
-## 6. Read the tables
+## 7. Read the tables
 
-- Header rows follow the schema. The small text under each label is the technical field name Document AI returns.
+- Header rows follow the schema. The small text under each label is the technical field name.
 - Supplier, buyer, invoice, and tax groups come from the schema.
-- Line items are one row per extracted line. Amount columns are totaled.
-- Confidence is the model's score from 0 to 1. Green is 90% or higher, orange is 75% to 89%, and red is below 75%.
-- An empty cell means the schema asked for that field and the model did not return it. For a manual schema, that usually means the template does not mark the field yet.
+- Line items are one row per extracted line. Amount columns are totaled. The rate column is not summed.
+- The confidence score is the model's own estimate from 0 to 1. It is not a Document AI score. Green is 90% or higher, orange is 75% to 89%, and red is below 75%.
+- An empty cell means the model did not find that field on the document.
 
-Preview sample loads a fictional invoice (Northwind Components to Contoso Retail, `ZSFL/26-27/0148`) so the tables can be reviewed without BTP.
+Preview sample loads a fictional invoice (Northwind Components to Contoso Retail, `ZSFL/26-27/0148`) so the tables can be reviewed without SAP AI Core.
 
 ## What can be added next
 
 - Save a confirmed header and its lines on the CAP invoice entity.
-- Correct a field and send the correction back to Document AI.
-- Keep a list of recent jobs.
+- Keep a list of recent extractions.
 
-`npm test` checks schema parsing, the sample totals, and how live extraction results are mapped onto the schema.
+`npm test` checks schema parsing, the sample totals, how extraction results are mapped onto the schema, and how the model JSON is mapped onto the same fields.

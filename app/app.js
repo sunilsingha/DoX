@@ -10,7 +10,8 @@
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('file');
   let previewUrl = '';
-  let previewResize = null;
+  let previewGeneration = 0;
+  let previewLoadingTask = null;
   const schemaInput = document.getElementById('schema-file');
   const message = document.getElementById('message');
   const guide = document.getElementById('guide');
@@ -92,10 +93,8 @@
   }
 
   async function loadSchemaChoices() {
-    const clientId = document.getElementById('dox-client').value.trim();
-    const query = clientId ? `?clientId=${encodeURIComponent(clientId)}` : '';
     try {
-      const response = await fetch(`/api/schemas${query}`);
+      const response = await fetch('/api/schemas');
       const body = await readJson(response);
       fillSchemaSelect(body.schemas || [], state.schema && state.schema.name);
     } catch (error) {
@@ -143,14 +142,12 @@
     document.getElementById('schema-version').value = option.dataset.version || '';
     setDocumentType(option.dataset.documentType || 'custom');
     if (state.schema && state.schema.name === option.value) return;
-    const clientId = document.getElementById('dox-client').value.trim();
-    const query = clientId ? `?clientId=${encodeURIComponent(clientId)}` : '';
     setBusy(true);
     try {
-      const response = await fetch(`/api/schemas/${encodeURIComponent(option.dataset.id)}/use${query}`, { method: 'POST' });
+      const response = await fetch(`/api/schemas/${encodeURIComponent(option.dataset.id)}/use`, { method: 'POST' });
       const schema = await readJson(response);
       applySchema(schema);
-      showMessage('positive', `Loaded ${schema.name}, version ${schema.version}, from Document AI.`);
+      showMessage('positive', `Loaded ${schema.name}, version ${schema.version}.`);
     } catch (error) {
       showMessage('negative', error.message);
     } finally {
@@ -172,9 +169,9 @@
 
   function renderConnection(status) {
     const node = document.getElementById('connection');
-    document.getElementById('dox-client').value = status.doxClient || 'default';
-    if (!document.getElementById('template').value) {
-      document.getElementById('template').value = status.template || '';
+    document.getElementById('resource-group').value = status.resourceGroup || 'default';
+    if (!document.getElementById('deployment-id').value) {
+      document.getElementById('deployment-id').value = status.deploymentId || '';
     }
     node.classList.remove('ready', 'warn', 'bad');
     if (status.configured) {
@@ -199,19 +196,26 @@
     setPreview(file);
   }
 
+  function clearPdfPreview() {
+    previewGeneration += 1;
+    if (previewLoadingTask) {
+      previewLoadingTask.destroy();
+      previewLoadingTask = null;
+    }
+    const pages = document.getElementById('preview-pages');
+    pages.hidden = true;
+    pages.replaceChildren();
+  }
+
   function setPreview(file) {
     const empty = document.getElementById('preview-empty');
-    const pdf = document.getElementById('preview-pdf');
     const image = document.getElementById('preview-image');
     const unsupported = document.getElementById('preview-unsupported');
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl);
       previewUrl = '';
     }
-    pdf.hidden = true;
-    pdf.removeAttribute('src');
-    pdf.style.width = '';
-    pdf.style.height = '';
+    clearPdfPreview();
     image.hidden = true;
     image.removeAttribute('src');
     unsupported.hidden = true;
@@ -229,43 +233,89 @@
     if (isTiff || (!isPdf && !isImage)) {
       unsupported.hidden = false;
       unsupported.textContent = isTiff
-        ? 'This browser cannot display TIFF files. The file is still sent to Document AI.'
-        : 'This file cannot be previewed here. It is still sent to Document AI.';
+        ? 'TIFF is not shown here, and SAP AI Core vision models do not accept it. Export the page as PNG or JPEG.'
+        : 'This file cannot be previewed here. Upload a PDF, PNG, or JPEG.';
+      return;
+    }
+    if (isPdf) {
+      showPdf(file);
       return;
     }
     previewUrl = URL.createObjectURL(file);
-    if (isPdf) {
-      pdf.hidden = false;
-      watchPreviewFrame();
-      requestAnimationFrame(() => {
-        sizePdfFrame();
-        pdf.src = previewUrl + '#toolbar=0&navpanes=0&scrollbar=1&zoom=page-width';
-      });
-      return;
-    }
     image.alt = file.name || 'Uploaded invoice';
     image.onerror = () => {
       image.hidden = true;
       unsupported.hidden = false;
-      unsupported.textContent = 'This image could not be previewed. The file is still sent to Document AI.';
+      unsupported.textContent = 'This image could not be previewed. Upload a PNG or JPEG.';
     };
     image.src = previewUrl;
     image.hidden = false;
   }
 
-  function sizePdfFrame() {
-    const frame = document.getElementById('preview-frame');
-    const pdf = document.getElementById('preview-pdf');
-    if (!frame || pdf.hidden) return;
-    pdf.style.width = frame.clientWidth + 'px';
-    pdf.style.height = frame.clientHeight + 'px';
-  }
-
-  function watchPreviewFrame() {
-    const frame = document.getElementById('preview-frame');
-    if (previewResize || typeof ResizeObserver === 'undefined') return;
-    previewResize = new ResizeObserver(() => sizePdfFrame());
-    previewResize.observe(frame);
+  async function showPdf(file) {
+    const generation = previewGeneration;
+    const pages = document.getElementById('preview-pages');
+    const unsupported = document.getElementById('preview-unsupported');
+    pages.hidden = false;
+    pages.replaceChildren();
+    const note = document.createElement('p');
+    note.className = 'preview-status';
+    note.textContent = 'Opening the invoice…';
+    pages.appendChild(note);
+    if (!window.pdfjsLib) {
+      pages.hidden = true;
+      unsupported.hidden = false;
+      unsupported.textContent = 'The invoice viewer did not load. Refresh the page and open the PDF again.';
+      return;
+    }
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.js';
+    let data;
+    try {
+      data = new Uint8Array(await file.arrayBuffer());
+    } catch (error) {
+      if (generation !== previewGeneration) return;
+      pages.hidden = true;
+      unsupported.hidden = false;
+      unsupported.textContent = 'This PDF could not be opened in the preview.';
+      return;
+    }
+    if (generation !== previewGeneration) return;
+    const task = window.pdfjsLib.getDocument({
+      data,
+      cMapUrl: '/vendor/pdfjs/cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: '/vendor/pdfjs/standard_fonts/'
+    });
+    previewLoadingTask = task;
+    let documentPdf;
+    try {
+      documentPdf = await task.promise;
+    } catch (error) {
+      if (generation !== previewGeneration) return;
+      pages.hidden = true;
+      unsupported.hidden = false;
+      unsupported.textContent = 'This PDF could not be opened in the preview.';
+      return;
+    }
+    if (generation !== previewGeneration) return;
+    pages.replaceChildren();
+    const count = Math.min(documentPdf.numPages, 8);
+    const width = Math.max(pages.clientWidth - 24, 280);
+    for (let number = 1; number <= count; number += 1) {
+      if (generation !== previewGeneration) return;
+      const page = await documentPdf.getPage(number);
+      const unscaled = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: width / unscaled.width });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      canvas.setAttribute('aria-label', `Invoice page ${number}`);
+      pages.appendChild(canvas);
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: context, viewport }).promise;
+    }
   }
 
   async function extract(mode) {
@@ -280,13 +330,13 @@
     form.set('schemaName', document.getElementById('schema-name').value.trim());
     form.set('schemaVersion', document.getElementById('schema-version').value.trim());
     form.set('documentType', document.getElementById('document-type').value);
-    form.set('doxClient', document.getElementById('dox-client').value.trim());
-    form.set('template', document.getElementById('template').value.trim());
+    form.set('resourceGroup', document.getElementById('resource-group').value.trim());
+    form.set('deploymentId', document.getElementById('deployment-id').value.trim());
     if (file) form.set('file', file);
     setBusy(true);
     showMessage('information', mode === 'sample'
       ? 'Filling the tables with a sample GST invoice.'
-      : 'Uploading the invoice and waiting for Document AI.');
+      : 'Uploading the invoice and waiting for SAP AI Core.');
     try {
       const response = await fetch('/api/extract', { method: 'POST', body: form });
       const body = await readJson(response);
@@ -308,12 +358,12 @@
     renderLines();
     const filled = hasValues(result);
     if (result.mode === 'sample') {
-      showMessage('information', 'Sample invoice only. Document AI was not called. Header and line items below use the schema columns.');
+      showMessage('information', 'Sample invoice only. SAP AI Core was not called. Header and line items below use the schema columns.');
       return;
     }
     const job = result.jobId ? ` Job ${result.jobId}.` : '';
     if (!filled) {
-      showMessage('critical', `Document AI finished with no values.${job} If the schema uses manual setup, add the activated template name and extract again.`);
+      showMessage('critical', `SAP AI Core finished with no values.${job} Check that the model can read the file and that the schema fields match the invoice.`);
       return;
     }
     showMessage('positive', `Extraction ${result.status}.${job}`);

@@ -4,6 +4,7 @@ _out
 connection.properties
 default-*.json
 !default-env.sample.json
+schema/.active
 .cdsrc-private.json
 gen/
 node_modules/

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light" />
-  <title>Invoice Extraction · Document AI</title>
+  <title>Invoice Extraction · SAP AI Core</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -16,7 +16,7 @@
         </svg>
       </span>
       <div>
-        <div class="product">Document AI</div>
+        <div class="product">SAP AI Core</div>
         <div class="product-sub">Invoice extraction</div>
       </div>
     </div>
@@ -27,8 +27,8 @@
     <div class="page-head">
       <div>
         <p class="kicker">SAP BTP</p>
-        <h1>Extract a GST invoice</h1>
-        <p class="lede">Upload a PDF or image. Document AI reads it with your custom schema, and the invoice stays beside the header and line items.</p>
+        <h1>Extract an invoice</h1>
+        <p class="lede">Choose a schema, then upload a PDF or image. A model deployed in SAP AI Core reads the same header and line-item fields, and the invoice stays beside the tables.</p>
       </div>
       <button type="button" class="btn" id="open-guide">Setup guide</button>
     </div>
@@ -43,7 +43,7 @@
             <path fill="#0070f2" d="M24 6l10 10h-6v12h-8V16h-6l10-10zm-14 26h28v6H10v-6z" opacity=".9"/>
           </svg>
           <p class="drop-title">Drop an invoice here</p>
-          <p class="drop-sub">PDF, PNG, JPEG, or TIFF · up to 20 MB</p>
+          <p class="drop-sub">Digital PDF, PNG, or JPEG · up to 20 MB</p>
           <input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,application/pdf,image/png,image/jpeg,image/tiff" hidden />
         </div>
         <div class="upload-side">
@@ -72,12 +72,10 @@
                   <option value="paymentAdvice">paymentAdvice</option>
                 </select>
               </label>
-              <label>Document AI client<input id="dox-client" autocomplete="off" /></label>
-              <label class="span-2">Template name or id
-                <input id="template" autocomplete="off" placeholder="Required when fields use manual setup" />
-              </label>
+              <label>Resource group<input id="resource-group" autocomplete="off" /></label>
+              <label>Deployment ID<input id="deployment-id" autocomplete="off" placeholder="From the running model deployment" /></label>
             </div>
-            <p class="hint">The schema list is the custom schemas in Document AI. Choosing one loads its fields into the tables and sends that name with <code>POST /document/jobs</code>. The client here is the Document AI client, usually <code>default</code>, not the XSUAA client id. A template is required when the schema fields use manual setup.</p>
+            <p class="hint">The schema list is the JSON files in the <code>schema</code> folder. Choosing one loads its fields into the tables. SAP AI Core does not store these schemas. The app sends the field list to the deployed model. Resource group is usually <code>default</code>. Deployment ID is the running foundation-model deployment.</p>
             <div class="actions">
               <button type="button" class="btn" id="load-schema">Load schema export</button>
               <input id="schema-file" type="file" accept="application/json,.json" hidden />
@@ -97,7 +95,7 @@
         </div>
         <div class="preview-frame" id="preview-frame">
           <p class="preview-empty" id="preview-empty">The uploaded invoice stays here, beside the extracted fields.</p>
-          <iframe id="preview-pdf" title="Uploaded invoice" hidden></iframe>
+          <div id="preview-pages" class="preview-pages" hidden></div>
           <img id="preview-image" alt="" hidden />
           <p class="preview-empty" id="preview-unsupported" hidden></p>
         </div>
@@ -161,50 +159,49 @@
 
   <dialog id="guide" aria-labelledby="guide-title">
     <div class="dialog-head">
-      <h2 id="guide-title">Set up Document AI extraction</h2>
+      <h2 id="guide-title">Set up SAP AI Core extraction</h2>
       <button type="button" class="btn icon-btn" id="close-guide" aria-label="Close">Close</button>
     </div>
     <div class="dialog-body">
       <ol class="steps">
         <li>
-          <strong>Subscribe, then create a service instance.</strong>
-          The Document AI application is where you designed the schema. This page calls the service instance. In your subaccount, open Instances and Subscriptions, create an instance of Document Information Extraction, and create a service key.
+          <strong>Entitle SAP AI Core on the extended plan.</strong>
+          In the global account, open Entitlements, choose Configure Entitlements, then Add Service Plans. Select SAP AI Core and the <code>extended</code> plan. Generative AI Hub is not included in the free or standard plan. Assign the entitlement to this subaccount.
         </li>
         <li>
-          <strong>Copy the service key into <code>default-env.json</code>.</strong>
-          Start from <code>default-env.sample.json</code>. Use <code>uaa.url</code>, <code>uaa.clientid</code>, <code>uaa.clientsecret</code>, and the service <code>url</code>. Leave this file uncommitted. On Cloud Foundry the same values are read from <code>VCAP_SERVICES</code>.
+          <strong>Subscribe to SAP AI Launchpad.</strong>
+          Add the SAP AI Launchpad entitlement and run its booster, or subscribe to it under Instances and Subscriptions. Open Launchpad with a user that has <code>mloperations_editor</code> or <code>genai_manager</code>. The service key used by this app does not need those roles. They are only for creating the deployment.
         </li>
         <li>
-          <strong>Activate the schema, and a template if the fields are manual.</strong>
-          Schema Configuration must show the schema as active. The first activated version is <code>1</code>. Custom documents usually use setup type <code>manual</code>, which only returns values after you create and activate a template for a sample invoice. Put that template name in Request options.
+          <strong>Create the AI Core instance and service key.</strong>
+          In the subaccount, create a service instance of SAP AI Core with plan <code>extended</code>. Create a service key and download it. Copy <code>url</code>, <code>clientid</code>, <code>clientsecret</code>, and <code>serviceurls.AI_API_URL</code> into <code>default-env.json</code> using the names in <code>default-env.sample.json</code>. Leave that file uncommitted. The instance creates a resource group named <code>default</code>. Use that unless you created another group.
         </li>
         <li>
-          <strong>Point the columns at your export.</strong>
-          Save the export as <code>schema/ZSFL_GST_Invoice_schema.json</code>, or choose Load schema export. The local file decides the table columns and the default schema name. BTP still extracts with the schema you activated there, so the names must match.
+          <strong>Deploy a vision-capable chat model.</strong>
+          In SAP AI Launchpad, select this AI Core runtime and the <code>default</code> resource group. Open ML Operations, then Scenarios, and confirm <code>foundation-models</code> is listed. If it is missing, the instance is not on the extended plan. Create a configuration: scenario <code>foundation-models</code>, the executable for the provider (for GPT models this is <code>azure-openai</code>), parameter <code>modelName</code> <code>gpt-4o</code>, and <code>modelVersion</code> <code>latest</code>. Create a deployment with duration Standard. Wait until the status is RUNNING. Copy the deployment ID into <code>AICORE_DEPLOYMENT_ID</code>. Deploy the model itself. An orchestration-only deployment is a different endpoint and is not what this page calls.
         </li>
         <li>
-          <strong>Start the app and upload an invoice.</strong>
-          Run <code>npm install</code> and <code>npm start</code>, then open the page. Choose a PDF or a single-page PNG or JPEG and press Extract invoice. The server asks XSUAA for a token, posts the file to <code>/document/jobs</code>, and polls <code>GET /document/jobs/{id}?extractedValues=true</code> until the status is DONE.
+          <strong>Keep one schema file per document type.</strong>
+          SAP AI Core does not store Document AI schemas. Put each export in the <code>schema</code> folder, for example <code>schema/ZSFL_GST_Invoice_schema.json</code>. The Schema menu lists those files. Choosing one loads its header and line-item fields. Add a letter-of-credit export the same way, with Load schema export or as another JSON file. The same model is used. Only the field list in the prompt changes.
+        </li>
+        <li>
+          <strong>Extract.</strong>
+          Run <code>npm install</code> and <code>npm start</code>, then open the page. Test connection checks the service key. Choose the schema, upload a digital PDF or a PNG or JPEG, and press Extract invoice. The app gets a client-credentials token and calls <code>POST /v2/inference/deployments/{id}/chat/completions</code> with header <code>AI-Resource-Group</code>. A PDF is sent to the model. A photo or scan should be PNG or JPEG. TIFF is not accepted.
         </li>
         <li>
           <strong>Read the two tables.</strong>
-          Header fields keep the schema order and show a confidence score. Line items are one row per extracted line. A green score is 90% or higher, orange is 75% to 89%, and red is below that. Empty cells are fields the schema asked for and the model did not return.
+          Header fields stay in schema order. Line items are one row per extracted line. The confidence score is the model's own estimate, from 0 to 1. Green is 90% or higher, orange is 75% to 89%, and red is below that. An empty cell means the model did not find that field on the document.
         </li>
       </ol>
-      <p>The request options look like this:</p>
-      <pre>{
-  "clientId": "default",
-  "documentType": "custom",
-  "schemaName": "ZSFL_GST_Invoice",
-  "schemaVersion": "1",
-  "templateName": "your-template"
-}</pre>
-      <p>Preview sample fills the tables with a fictional GST invoice so you can learn the layout before the service key works. It does not call BTP.</p>
-      <p>The service key used to be hardcoded in <code>srv/dox.js</code>. It is read from the environment now. Rotate that key in BTP if this repository was shared. The old trial authentication host currently returns 404, so create a service key from the subaccount you are using.</p>
-      <p>Next we can save a confirmed header into the CAP invoice entity, send field corrections back to Document AI, and keep a list of jobs.</p>
+      <p>The call looks like this:</p>
+      <pre>POST {AI_API_URL}/v2/inference/deployments/{deploymentId}/chat/completions?api-version=2023-05-15
+AI-Resource-Group: default
+Authorization: Bearer &lt;token&gt;</pre>
+      <p>Preview sample fills the tables with a fictional GST invoice so you can learn the layout before the service key works. It does not call SAP AI Core.</p>
     </div>
   </dialog>
 
+  <script src="/vendor/pdfjs/pdf.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
