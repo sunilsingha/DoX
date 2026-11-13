@@ -84,6 +84,16 @@ Use Test connection before the first invoice. A success message means the servic
 
 A PDF is sent to the model with the field list, so the model reads the pages itself. If that deployment refuses a PDF attachment, the app reads the text from the file and sends the text instead. A PNG or JPEG is sent as an image. TIFF is not accepted.
 
+## Compare Document AI and AI Core
+
+The Source control has three choices:
+
+- **AI Core** sends the file to the deployed model.
+- **Document AI** sends the file to Document Information Extraction with the schema name, version, and optional template.
+- **Both** runs the two extractions on the same file and shows one comparison. Matching values stay plain. Different values are highlighted. A service that is not configured is shown as an error on its side, and the other side is still displayed.
+
+Document AI uses `DOX_UAA_URL`, `DOX_UAA_CLIENTID`, `DOX_UAA_CLIENTSECRET`, and `DOX_URL` from `default-env.json`, alongside the `AICORE_*` values. `DOX_CLIENT` is the Document AI client inside the extraction options, usually `default`. `DOX_TEMPLATE` is the activated template name when the schema fields use manual setup.
+
 The server requests a client-credentials token, then sends:
 
 ```text

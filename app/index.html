@@ -28,9 +28,18 @@
       <div>
         <p class="kicker">SAP BTP</p>
         <h1>Extract an invoice</h1>
-        <p class="lede">Choose a schema, then upload a PDF or image. A model deployed in SAP AI Core reads the same header and line-item fields, and the invoice stays beside the tables.</p>
+        <p class="lede">Pick where to extract, then upload a PDF or image. The invoice stays beside the fields.</p>
       </div>
       <button type="button" class="btn" id="open-guide">Setup guide</button>
+    </div>
+
+    <div class="source-bar">
+      <span id="source-label">Extract with</span>
+      <div class="source-toggle" role="radiogroup" aria-labelledby="source-label">
+        <label><input type="radio" name="source" value="aicore" checked /> SAP AI Core</label>
+        <label><input type="radio" name="source" value="document" /> SAP Document AI</label>
+        <label><input type="radio" name="source" value="both" /> Compare both</label>
+      </div>
     </div>
 
     <div id="schema-note" class="strip information" hidden></div>
@@ -49,7 +58,10 @@
         <div class="upload-side">
           <h2 id="upload-title">Document</h2>
           <p id="file-meta" class="file-meta">No file selected.</p>
-          <p id="connection" class="status-pill">Checking service key…</p>
+          <div class="status-row">
+            <p id="connection" class="status-pill">AI Core…</p>
+            <p id="connection-document" class="status-pill">Document AI…</p>
+          </div>
           <label class="schema-field" for="schema-name">Schema
             <select id="schema-name">
               <option value="">Loading schemas…</option>
@@ -72,10 +84,14 @@
                   <option value="paymentAdvice">paymentAdvice</option>
                 </select>
               </label>
-              <label>Resource group<input id="resource-group" autocomplete="off" /></label>
-              <label>Deployment ID<input id="deployment-id" autocomplete="off" placeholder="From the running model deployment" /></label>
+              <label class="for-aicore">Resource group<input id="resource-group" autocomplete="off" /></label>
+              <label class="for-aicore">Deployment ID<input id="deployment-id" autocomplete="off" placeholder="From the running model deployment" /></label>
+              <label class="for-document">Document AI client<input id="dox-client" autocomplete="off" /></label>
+              <label class="for-document span-2">Template name or id
+                <input id="template" autocomplete="off" placeholder="Needed when fields use manual setup" />
+              </label>
             </div>
-            <p class="hint">The schema list is the JSON files in the <code>schema</code> folder. Choosing one loads its fields into the tables. SAP AI Core does not store these schemas. The app sends the field list to the deployed model. Resource group is usually <code>default</code>. Deployment ID is the running foundation-model deployment.</p>
+            <p class="hint" id="source-hint">AI Core sends the schema fields to the deployed model. Resource group is usually <code>default</code>. Deployment ID is the running foundation-model deployment.</p>
             <div class="actions">
               <button type="button" class="btn" id="load-schema">Load schema export</button>
               <input id="schema-file" type="file" accept="application/json,.json" hidden />
@@ -102,6 +118,7 @@
       </aside>
 
       <div class="result-pane">
+        <div id="single-results">
         <section id="facets" class="facets" hidden></section>
 
         <section class="card" aria-labelledby="header-title">
@@ -153,6 +170,37 @@
             </table>
           </div>
         </section>
+        </div>
+
+        <section id="compare" class="card" hidden aria-labelledby="compare-title">
+          <div class="panel-head">
+            <div>
+              <h2 id="compare-title">Comparison</h2>
+              <p class="panel-sub" id="compare-summary">Document AI and AI Core run on the same invoice.</p>
+            </div>
+          </div>
+          <div id="compare-errors"></div>
+          <div class="legend">
+            <span class="confidence high"><i></i>Same value</span>
+            <span class="confidence low"><i></i>Different value</span>
+          </div>
+          <div class="table-scroll">
+            <table id="compare-header">
+              <caption class="sr-only">Header fields compared</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Field</th>
+                  <th scope="col">Document AI</th>
+                  <th scope="col">AI Core</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <h3 class="compare-lines-title">Line items</h3>
+          <p class="panel-sub" id="compare-line-count"></p>
+          <div id="compare-lines"></div>
+        </section>
       </div>
     </section>
   </main>
@@ -186,7 +234,7 @@
         </li>
         <li>
           <strong>Extract.</strong>
-          Run <code>npm install</code> and <code>npm start</code>, then open the page. Test connection checks the service key. Choose the schema, upload a digital PDF or a PNG or JPEG, and press Extract invoice. The app gets a client-credentials token and calls <code>POST /v2/inference/deployments/{id}/chat/completions</code> with header <code>AI-Resource-Group</code>. A PDF is sent to the model. A photo or scan should be PNG or JPEG. TIFF is not accepted.
+          Run <code>npm install</code> and <code>npm start</code>, then open the page. Choose AI Core, Document AI, or Both. Both sends the same file to each service and marks fields that disagree. Test connection checks the selected source. Document AI also needs <code>DOX_UAA_URL</code>, <code>DOX_UAA_CLIENTID</code>, <code>DOX_UAA_CLIENTSECRET</code>, and <code>DOX_URL</code> in <code>default-env.json</code>. Put the activated template name in Request options when the schema fields use manual setup. A PDF is sent to AI Core. A photo or scan should be PNG or JPEG. TIFF is not accepted by the vision model.
         </li>
         <li>
           <strong>Read the two tables.</strong>
