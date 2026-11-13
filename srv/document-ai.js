@@ -933,7 +933,9 @@ async function extractWithAiCore(file, schema, body) {
     filename: file.originalname,
     schema,
     resourceGroup: body.resourceGroup,
-    deploymentId: body.deploymentId
+    deploymentId: body.deploymentId,
+    modelName: body.modelName,
+    executableId: body.executableId
   });
   return {
     ok: true,
@@ -942,7 +944,8 @@ async function extractWithAiCore(file, schema, body) {
     header: live.header,
     lineItems: live.lineItems,
     deploymentId: live.deploymentId,
-    resourceGroup: live.resourceGroup
+    resourceGroup: live.resourceGroup,
+    modelName: live.modelName || ''
   };
 }
 
@@ -959,7 +962,9 @@ function singleResponse(source, file, schema, live) {
     file: requestFile(file),
     schema: schemaSummary(schema),
     header: live.header,
-    lineItems: live.lineItems
+    lineItems: live.lineItems,
+    modelName: live.modelName || '',
+    deploymentId: live.deploymentId || ''
   };
 }
 
@@ -981,7 +986,8 @@ function compareResponse(schema, file, documentSide, coreSide, sample) {
       ok: coreSide.ok !== false,
       error: coreSide.error || '',
       detail: coreSide.detail || '',
-      status: coreSide.status || ''
+      status: coreSide.status || '',
+      modelName: coreSide.modelName || ''
     },
     comparison: compareExtractions(documentSide, coreSide)
   };
@@ -1025,6 +1031,15 @@ function registerRoutes(app) {
         return res.json({ ok: true, ...publicStatus(), aiCore: core });
       }
       res.json(publicStatus());
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.get('/api/models', async (req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(await aiCore.listChatModels({ resourceGroup: req.query.resourceGroup }));
     } catch (error) {
       sendError(res, error);
     }

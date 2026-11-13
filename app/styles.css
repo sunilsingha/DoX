@@ -211,8 +211,26 @@ h2 { font-size: 1.125rem; }
 .source-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.8rem;
   margin: 0 0 1rem;
+}
+.model-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--sapLabelColor);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.model-picker select { min-width: 14rem; font-weight: 600; }
+.model-note {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--sapLabelColor);
+  font-size: 0.8rem;
+  font-weight: 400;
 }
 .source-bar > span {
   flex: 0 0 auto;

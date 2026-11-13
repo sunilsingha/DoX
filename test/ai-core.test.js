@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -28,6 +28,136 @@ const prompt = extractionPrompt(loadSchemaSync());
 assert.ok(prompt.includes('invoiceNumber'));
 assert.ok(prompt.includes('hsnCode'));
 assert.ok(prompt.includes('ZSFL_GST_Invoice'));
+
+assert.strictEqual(isChatModel('gpt-4o'), true);
+assert.strictEqual(isChatModel('gpt-4o-mini'), true);
+assert.strictEqual(isChatModel('gemini-2.5-flash'), true);
+assert.strictEqual(isChatModel('text-embedding-3-large'), false);
+assert.strictEqual(isChatModel('gpt-4o-realtime'), false);
+assert.strictEqual(isChatModel('sap-rpt-1-small'), false);
+assert.strictEqual(isChatModel('gemini-2.5-flash-image'), false);
+assert.strictEqual(reasoningModel('o4-mini'), true);
+assert.strictEqual(reasoningModel('gpt-5.4'), true);
+assert.strictEqual(reasoningModel('gpt-4o'), false);
+
+const supported = supportedModelNames({
+  parameters: [{
+    name: 'modelName',
+    description: 'supportedModels: text-embedding-3-large, gpt-4o-mini, gpt-4o, gpt-4o-realtime, gpt-4.1, gpt-4.1-mini, o4-mini'
+  }]
+});
+assert.ok(supported.includes('gpt-4o'));
+assert.ok(supported.includes('o4-mini'));
+assert.ok(supported.includes('text-embedding-3-large'));
+assert.ok(supported.includes('gpt-4o-realtime'));
+
+const catalog = joinModelCatalog({
+  configurations: [
+    {
+      id: 'cfg-mini',
+      name: 'mini',
+      scenarioId: 'foundation-models',
+      executableId: 'azure-openai',
+      parameterBindings: [
+        { key: 'modelName', value: 'gpt-4o-mini' },
+        { key: 'modelVersion', value: 'latest' }
+      ]
+    },
+    {
+      id: 'cfg-embed',
+      scenarioId: 'foundation-models',
+      executableId: 'azure-openai',
+      parameterBindings: [{ key: 'modelName', value: 'text-embedding-3-large' }]
+    }
+  ],
+  deployments: [
+    { id: 'dep-mini', configurationId: 'cfg-mini', status: 'RUNNING', scenarioId: 'foundation-models' },
+    { id: 'dep-stopped', configurationId: 'cfg-mini', status: 'STOPPED', scenarioId: 'foundation-models' },
+    { id: 'dep-embed', configurationId: 'cfg-embed', status: 'RUNNING', scenarioId: 'foundation-models' },
+    {
+      id: 'dep-rpt',
+      status: 'RUNNING',
+      scenarioId: 'foundation-models',
+      executableId: 'sap-rpt',
+      details: { resources: { backendDetails: { model: { name: 'sap-rpt-1-small', version: '1' } } } }
+    }
+  ],
+  supportedNames: supported
+});
+assert.ok(catalog.some(item => item.modelName === 'gpt-4o-mini' && item.deployed && item.usable && item.deploymentId === 'dep-mini'));
+assert.ok(!catalog.some(item => item.modelName === 'gpt-4o'));
+assert.ok(!catalog.some(item => item.modelName.includes('embedding')));
+assert.ok(!catalog.some(item => item.modelName.includes('realtime')));
+assert.ok(!catalog.some(item => item.modelName.includes('rpt')));
+assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', '').deploymentId, 'dep-mini');
+assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', 'other-deployment'), null);
+assert.strictEqual(pickDeployment(catalog, 'gpt-4o', ''), null);
+
+const merged = mergeConfiguredModels([
+  { modelName: 'gemini-2.5-flash', deployed: false, usable: false, deploymentId: '', executableId: 'gcp-vertexai' },
+  { modelName: 'gpt-4o-mini', deployed: true, usable: true, deploymentId: 'dep-mini', executableId: 'azure-openai' }
+], {
+  geminiDeploymentId: 'dep-gemini',
+  geminiModel: 'gemini-2.5-flash'
+});
+assert.strictEqual(merged[0].modelName, 'gemini-2.5-flash');
+assert.strictEqual(merged[0].deploymentId, 'dep-gemini');
+assert.strictEqual(merged[0].usable, true);
+assert.strictEqual(merged.filter(item => item.modelName === 'gemini-2.5-flash').length, 1);
+assert.ok(merged.some(item => item.deploymentId === 'dep-mini'));
+
+const geminiCatalog = joinModelCatalog({
+  configurations: [{
+    id: 'cfg-gemini',
+    scenarioId: 'foundation-models',
+    executableId: 'gcp-vertexai',
+    parameterBindings: [{ key: 'modelName', value: 'gemini-embedding' }, { key: 'modelVersion', value: 'latest' }]
+  }],
+  deployments: [{
+    id: 'da00bb108e5cec61',
+    configurationId: 'cfg-gemini',
+    status: 'RUNNING',
+    scenarioId: 'foundation-models',
+    executableId: 'gcp-vertexai',
+    details: { resources: { backendDetails: { model: { name: 'gemini-embedding', version: 'latest' } } } }
+  }],
+  supportedNames: [
+    { modelName: 'gemini-2.5-flash', executableId: 'gcp-vertexai' },
+    { modelName: 'gemini-embedding', executableId: 'gcp-vertexai' }
+  ]
+});
+assert.ok(!geminiCatalog.some(item => item.modelName === 'gemini-embedding'));
+assert.ok(!geminiCatalog.some(item => item.modelName === 'gemini-2.5-flash'));
+assert.strictEqual(providerFor({ modelName: 'gemini-2.5-flash', executableId: 'gcp-vertexai' }), 'gemini');
+const geminiBody = geminiPayload([
+  { type: 'text', text: 'Extract' },
+  { type: 'file', file: { file_data: 'data:application/pdf;base64,JVBERg==' } }
+]);
+assert.strictEqual(geminiBody.contents[0].parts[1].inlineData.mimeType, 'application/pdf');
+assert.strictEqual(geminiBody.generationConfig.responseMimeType, 'application/json');
+const geminiText = messageText({ candidates: [{ content: { parts: [{ text: '{"header":{}}' }] } }] });
+assert.ok(geminiText.includes('header'));
+
+const miniPayload = chatPayload('gpt-4o-mini', 'extract');
+assert.strictEqual(miniPayload.temperature, 0);
+assert.strictEqual(miniPayload.max_tokens, 4096);
+const reasoningPayload = chatPayload('o4-mini', 'extract');
+assert.strictEqual(reasoningPayload.temperature, undefined);
+assert.strictEqual(reasoningPayload.max_completion_tokens, 4096);
+
+const detailCatalog = joinModelCatalog({
+  configurations: [],
+  deployments: [{
+    id: 'dep-detail',
+    configurationId: 'missing',
+    status: 'RUNNING',
+    scenarioId: 'foundation-models',
+    details: { resources: { backendDetails: { model: { name: 'gpt-4.1', version: '2025-04-14' } } } }
+  }],
+  supportedNames: []
+});
+assert.strictEqual(detailCatalog[0].modelName, 'gpt-4.1');
+assert.strictEqual(detailCatalog[0].modelVersion, '2025-04-14');
 
 const status = publicStatus();
 assert.ok(Array.isArray(status.missing));

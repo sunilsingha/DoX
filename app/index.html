@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light" />
-  <title>Invoice Extraction · SAP AI Core</title>
+  <title>SAP Document Extraction</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -16,8 +16,7 @@
         </svg>
       </span>
       <div>
-        <div class="product">SAP AI Core</div>
-        <div class="product-sub">Invoice extraction</div>
+        <div class="product">SAP Document Extraction</div>
       </div>
     </div>
     <div class="shell-schema" id="shell-schema">Schema</div>
@@ -30,7 +29,6 @@
         <h1>Extract an invoice</h1>
         <p class="lede">Pick where to extract, then upload a PDF or image. The invoice stays beside the fields.</p>
       </div>
-      <button type="button" class="btn" id="open-guide">Setup guide</button>
     </div>
 
     <div class="source-bar">
@@ -40,6 +38,13 @@
         <label><input type="radio" name="source" value="document" /> SAP Document AI</label>
         <label><input type="radio" name="source" value="both" /> Compare both</label>
       </div>
+      <label class="model-picker for-aicore" for="model-name">
+        Model
+        <select id="model-name">
+          <option value="">Configured deployment</option>
+        </select>
+      </label>
+      <p class="model-note for-aicore" id="model-note">The menu lists running chat deployments only.</p>
     </div>
 
     <div id="schema-note" class="strip information" hidden></div>
@@ -85,13 +90,15 @@
                 </select>
               </label>
               <label class="for-aicore">Resource group<input id="resource-group" autocomplete="off" /></label>
-              <label class="for-aicore">Deployment ID<input id="deployment-id" autocomplete="off" placeholder="From the running model deployment" /></label>
+              <label class="for-aicore">GPT deployment ID<input id="deployment-id" autocomplete="off" placeholder="Running azure-openai deployment" /></label>
+              <label class="for-aicore">Gemini deployment ID<input id="gemini-deployment-id" autocomplete="off" placeholder="Running gcp-vertexai deployment" /></label>
+              <label class="for-aicore">Gemini model<input id="gemini-model" autocomplete="off" placeholder="gemini-2.5-flash" /></label>
               <label class="for-document">Document AI client<input id="dox-client" autocomplete="off" /></label>
               <label class="for-document span-2">Template name or id
                 <input id="template" autocomplete="off" placeholder="Needed when fields use manual setup" />
               </label>
             </div>
-            <p class="hint" id="source-hint">AI Core sends the schema fields to the deployed model. Resource group is usually <code>default</code>. Deployment ID is the running foundation-model deployment.</p>
+            <p class="hint" id="source-hint">GPT and Gemini each have their own deployment ID. Choose the model above. Resource group is usually <code>default</code>.</p>
             <div class="actions">
               <button type="button" class="btn" id="load-schema">Load schema export</button>
               <input id="schema-file" type="file" accept="application/json,.json" hidden />
@@ -226,7 +233,7 @@
         </li>
         <li>
           <strong>Deploy a vision-capable chat model.</strong>
-          In SAP AI Launchpad, select this AI Core runtime and the <code>default</code> resource group. Open ML Operations, then Scenarios, and confirm <code>foundation-models</code> is listed. If it is missing, the instance is not on the extended plan. Create a configuration: scenario <code>foundation-models</code>, the executable for the provider (for GPT models this is <code>azure-openai</code>), parameter <code>modelName</code> <code>gpt-4o</code>, and <code>modelVersion</code> <code>latest</code>. Create a deployment with duration Standard. Wait until the status is RUNNING. Copy the deployment ID into <code>AICORE_DEPLOYMENT_ID</code>. Deploy the model itself. An orchestration-only deployment is a different endpoint and is not what this page calls.
+          In SAP AI Launchpad, select this AI Core runtime and the <code>default</code> resource group. Open ML Operations, then Scenarios, and confirm <code>foundation-models</code> is listed. If it is missing, the instance is not on the extended plan. Create a configuration: scenario <code>foundation-models</code>, the executable for the provider (for GPT models this is <code>azure-openai</code>), parameter <code>modelName</code> <code>gpt-4o</code>, and <code>modelVersion</code> <code>latest</code>. Create a deployment with duration Standard. Wait until the status is RUNNING. Copy the deployment ID into <code>AICORE_DEPLOYMENT_ID</code>. Deploy the model itself. An orchestration-only deployment is a different endpoint and is not what this page calls. One deployment serves only the <code>modelName</code> on its configuration. To switch models from this page, create another configuration for each model, such as <code>gpt-4o-mini</code> or <code>gpt-4.1</code>, and deploy that too. The Model menu lists only RUNNING chat deployments and calls the one you pick. GPT models use executable <code>azure-openai</code>. Gemini chat models use executable <code>gcp-vertexai</code> with a model such as <code>gemini-2.5-flash</code>. Undeployed models, embedding models, and realtime models are not listed.
         </li>
         <li>
           <strong>Keep one schema file per document type.</strong>
@@ -234,7 +241,7 @@
         </li>
         <li>
           <strong>Extract.</strong>
-          Run <code>npm install</code> and <code>npm start</code>, then open the page. Choose AI Core, Document AI, or Both. Both sends the same file to each service and marks fields that disagree. Test connection checks the selected source. Document AI also needs <code>DOX_UAA_URL</code>, <code>DOX_UAA_CLIENTID</code>, <code>DOX_UAA_CLIENTSECRET</code>, and <code>DOX_URL</code> in <code>default-env.json</code>. Put the activated template name in Request options when the schema fields use manual setup. A PDF is sent to AI Core. A photo or scan should be PNG or JPEG. TIFF is not accepted by the vision model.
+          Run <code>npm install</code> and <code>npm start</code>, then open the page. Choose AI Core, Document AI, or Both. Both sends the same file to each service and marks fields that disagree. With AI Core or Both, the Model menu chooses which running deployment reads the invoice. Configured deployment uses <code>AICORE_DEPLOYMENT_ID</code>. Test connection checks the selected source. Document AI also needs <code>DOX_UAA_URL</code>, <code>DOX_UAA_CLIENTID</code>, <code>DOX_UAA_CLIENTSECRET</code>, and <code>DOX_URL</code> in <code>default-env.json</code>. Put the activated template name in Request options when the schema fields use manual setup. A PDF is sent to AI Core. A photo or scan should be PNG or JPEG. TIFF is not accepted by the vision model.
         </li>
         <li>
           <strong>Read the two tables.</strong>
