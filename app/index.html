@@ -28,9 +28,18 @@
       <div>
         <p class="kicker">SAP BTP</p>
         <h1>Extract an invoice</h1>
-        <p class="lede">Choose a schema, then upload a PDF or image. A model deployed in SAP AI Core reads the same header and line-item fields, and the invoice stays beside the tables.</p>
+        <p class="lede">Pick where to extract, then upload a PDF or image. The invoice stays beside the fields.</p>
       </div>
       <button type="button" class="btn" id="open-guide">Setup guide</button>
+    </div>
+
+    <div class="source-bar">
+      <span id="source-label">Extract with</span>
+      <div class="source-toggle" role="radiogroup" aria-labelledby="source-label">
+        <label><input type="radio" name="source" value="aicore" checked /> SAP AI Core</label>
+        <label><input type="radio" name="source" value="document" /> SAP Document AI</label>
+        <label><input type="radio" name="source" value="both" /> Compare both</label>
+      </div>
     </div>
 
     <div id="schema-note" class="strip information" hidden></div>
@@ -52,14 +61,6 @@
           <div class="status-row">
             <p id="connection" class="status-pill">AI Core…</p>
             <p id="connection-document" class="status-pill">Document AI…</p>
-          </div>
-          <div class="source-field">
-            <span id="source-label">Source</span>
-            <div class="source-toggle" role="radiogroup" aria-labelledby="source-label">
-              <label><input type="radio" name="source" value="aicore" checked /> AI Core</label>
-              <label><input type="radio" name="source" value="document" /> Document AI</label>
-              <label><input type="radio" name="source" value="both" /> Both</label>
-            </div>
           </div>
           <label class="schema-field" for="schema-name">Schema
             <select id="schema-name">
