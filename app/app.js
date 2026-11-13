@@ -19,6 +19,10 @@
   document.getElementById('open-guide').addEventListener('click', () => guide.showModal());
   document.getElementById('close-guide').addEventListener('click', () => guide.close());
   document.getElementById('schema-name').addEventListener('change', () => useSelectedSchema());
+  document.querySelectorAll('input[name="source"]').forEach(input => {
+    input.addEventListener('change', syncSourceFields);
+  });
+  syncSourceFields();
   document.getElementById('extract').addEventListener('click', () => extract('live'));
   document.getElementById('sample').addEventListener('click', () => extract('sample'));
   document.getElementById('probe').addEventListener('click', probe);
@@ -167,19 +171,75 @@
     select.value = value || 'custom';
   }
 
+  function selectedSource() {
+    const picked = document.querySelector('input[name="source"]:checked');
+    return picked ? picked.value : 'aicore';
+  }
+
+  function syncSourceFields() {
+    const source = selectedSource();
+    document.querySelectorAll('.for-aicore').forEach(node => { node.hidden = source === 'document'; });
+    document.querySelectorAll('.for-document').forEach(node => { node.hidden = source === 'aicore'; });
+    const hint = document.getElementById('source-hint');
+    const extract = document.getElementById('extract');
+    if (source === 'document') {
+      hint.innerHTML = 'Document AI extracts with the schema name and version. The client is usually <code>default</code>. A template is required when the schema fields use manual setup.';
+      extract.textContent = 'Extract invoice';
+    } else if (source === 'both') {
+      hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. Fill in the AI Core deployment and the Document AI client before extracting.';
+      extract.textContent = 'Extract with both';
+    } else {
+      hint.innerHTML = 'AI Core sends the schema fields to the deployed model. Resource group is usually <code>default</code>. Deployment ID is the running foundation-model deployment.';
+      extract.textContent = 'Extract invoice';
+    }
+  }
+
+  function paintPill(node, configured, label, host) {
+    node.classList.remove('ready', 'warn', 'bad');
+    if (configured) {
+      node.classList.add('ready');
+      node.textContent = host ? `${label} · ${host}` : `${label} ready`;
+    } else {
+      node.classList.add('warn');
+      node.textContent = `${label} not configured`;
+    }
+  }
+
   function renderConnection(status) {
-    const node = document.getElementById('connection');
     document.getElementById('resource-group').value = status.resourceGroup || 'default';
     if (!document.getElementById('deployment-id').value) {
       document.getElementById('deployment-id').value = status.deploymentId || '';
     }
-    node.classList.remove('ready', 'warn', 'bad');
-    if (status.configured) {
-      node.classList.add('ready');
-      node.textContent = `Service key found · ${status.apiHost}`;
-    } else {
-      node.classList.add('warn');
-      node.textContent = 'Service key not configured';
+    const documentStatus = status.documentAi || {};
+    if (!document.getElementById('dox-client').value) {
+      document.getElementById('dox-client').value = documentStatus.doxClient || 'default';
+    }
+    if (!document.getElementById('template').value) {
+      document.getElementById('template').value = documentStatus.template || '';
+    }
+    const coreProbe = status.aiCore;
+    paintPill(
+      document.getElementById('connection'),
+      coreProbe ? coreProbe.ok : status.configured,
+      'AI Core',
+      (coreProbe && coreProbe.tokenHost) || status.apiHost
+    );
+    const documentProbe = status.documentAi;
+    paintPill(
+      document.getElementById('connection-document'),
+      documentProbe ? documentProbe.configured !== false && documentProbe.ok !== false : false,
+      'Document AI',
+      documentProbe && documentProbe.apiHost
+    );
+    if (coreProbe && coreProbe.ok === false) {
+      document.getElementById('connection').classList.remove('ready', 'warn');
+      document.getElementById('connection').classList.add('bad');
+      document.getElementById('connection').textContent = 'AI Core failed';
+    }
+    if (documentProbe && documentProbe.ok === false) {
+      document.getElementById('connection-document').classList.remove('ready', 'warn');
+      document.getElementById('connection-document').classList.add('bad');
+      document.getElementById('connection-document').textContent = 'Document AI failed';
     }
   }
 
@@ -325,18 +385,27 @@
       showMessage('critical', 'Choose an invoice file first, or preview the sample.');
       return;
     }
+    const source = selectedSource();
     const form = new FormData();
     form.set('mode', mode);
+    form.set('source', source);
     form.set('schemaName', document.getElementById('schema-name').value.trim());
     form.set('schemaVersion', document.getElementById('schema-version').value.trim());
     form.set('documentType', document.getElementById('document-type').value);
     form.set('resourceGroup', document.getElementById('resource-group').value.trim());
     form.set('deploymentId', document.getElementById('deployment-id').value.trim());
+    form.set('doxClient', document.getElementById('dox-client').value.trim());
+    form.set('template', document.getElementById('template').value.trim());
     if (file) form.set('file', file);
     setBusy(true);
+    const waiting = source === 'both'
+      ? 'Uploading the invoice to Document AI and SAP AI Core.'
+      : source === 'document'
+        ? 'Uploading the invoice and waiting for Document AI.'
+        : 'Uploading the invoice and waiting for SAP AI Core.';
     showMessage('information', mode === 'sample'
       ? 'Filling the tables with a sample GST invoice.'
-      : 'Uploading the invoice and waiting for SAP AI Core.');
+      : waiting);
     try {
       const response = await fetch('/api/extract', { method: 'POST', body: form });
       const body = await readJson(response);
@@ -349,6 +418,12 @@
   }
 
   function showResult(result) {
+    if (result.mode === 'compare') {
+      renderComparison(result);
+      return;
+    }
+    document.getElementById('single-results').hidden = false;
+    document.getElementById('compare').hidden = true;
     state.header = result.header || [];
     state.lineItems = result.lineItems || [];
     const currency = state.header.find(field => field.name === 'currencyCode');
@@ -357,25 +432,131 @@
     renderHeader();
     renderLines();
     const filled = hasValues(result);
+    const sourceName = result.source === 'document' ? 'Document AI' : 'SAP AI Core';
     if (result.mode === 'sample') {
-      showMessage('information', 'Sample invoice only. SAP AI Core was not called. Header and line items below use the schema columns.');
+      showMessage('information', `Sample invoice only. ${sourceName} was not called. Header and line items below use the schema columns.`);
       return;
     }
     const job = result.jobId ? ` Job ${result.jobId}.` : '';
     if (!filled) {
-      showMessage('critical', `SAP AI Core finished with no values.${job} Check that the model can read the file and that the schema fields match the invoice.`);
+      showMessage('critical', `${sourceName} finished with no values.${job}`);
       return;
     }
-    showMessage('positive', `Extraction ${result.status}.${job}`);
+    showMessage('positive', `${sourceName} extraction ${result.status}.${job}`);
+  }
+
+  function renderComparison(result) {
+    document.getElementById('single-results').hidden = true;
+    const panel = document.getElementById('compare');
+    panel.hidden = false;
+    const comparison = result.comparison || { header: [], lineItems: [], summary: {} };
+    const summary = comparison.summary || {};
+    document.getElementById('compare-summary').textContent = result.sample
+      ? `Sample only. ${summary.headerMatch || 0} header fields match and ${summary.headerDiffer || 0} differ.`
+      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.`;
+    const errors = document.getElementById('compare-errors');
+    errors.replaceChildren();
+    if (result.documentAi && result.documentAi.ok === false) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
+    if (result.aiCore && result.aiCore.ok === false) errors.appendChild(errorStrip(`AI Core: ${result.aiCore.error}`));
+    const tbody = document.querySelector('#compare-header tbody');
+    tbody.replaceChildren();
+    (comparison.header || []).forEach(field => tbody.appendChild(compareRow(field)));
+    const lines = document.getElementById('compare-lines');
+    lines.replaceChildren();
+    const lineItems = comparison.lineItems || [];
+    document.getElementById('compare-line-count').textContent = lineItems.length
+      ? `${lineItems.length} compared ${lineItems.length === 1 ? 'line' : 'lines'}.`
+      : 'Neither extraction returned line items.';
+    lineItems.forEach(line => {
+      const block = document.createElement('section');
+      block.className = `compare-line ${line.state}`;
+      const title = document.createElement('h4');
+      title.textContent = `Line ${line.index}`;
+      const table = document.createElement('table');
+      const body = document.createElement('tbody');
+      line.fields.filter(field => field.state !== 'empty').forEach(field => body.appendChild(compareRow(field)));
+      if (!body.childNodes.length) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 3;
+        cell.className = 'empty';
+        cell.textContent = 'No values on this line.';
+        row.appendChild(cell);
+        body.appendChild(row);
+      }
+      table.appendChild(body);
+      block.append(title, table);
+      lines.appendChild(block);
+    });
+    if (result.sample) {
+      showMessage('information', 'Sample invoice only. Neither service was called. The comparison uses the same sample on both sides.');
+      return;
+    }
+    if ((result.documentAi && result.documentAi.ok === false) || (result.aiCore && result.aiCore.ok === false)) {
+      showMessage('critical', 'One extraction did not finish. The comparison shows the values that did come back.');
+      return;
+    }
+    if (summary.differ) {
+      showMessage('information', `${summary.differ} values differ across Document AI and AI Core.`);
+      return;
+    }
+    showMessage('positive', 'Document AI and AI Core returned the same values.');
+  }
+
+  function errorStrip(text) {
+    const node = document.createElement('p');
+    node.className = 'strip negative';
+    node.textContent = text;
+    return node;
+  }
+
+  function compareRow(field) {
+    const row = document.createElement('tr');
+    row.className = field.state;
+    const name = document.createElement('th');
+    name.scope = 'row';
+    name.textContent = field.label || field.name;
+    row.append(name, compareCell(field.documentAi), compareCell(field.aiCore));
+    return row;
+  }
+
+  function compareCell(side) {
+    const cell = document.createElement('td');
+    const value = document.createElement('div');
+    value.className = 'value';
+    const raw = side && side.value != null && side.value !== '' ? side.value : '';
+    value.textContent = raw === '' ? '—' : formatCompare(raw);
+    cell.appendChild(value);
+    if (side && side.confidence != null && raw !== '') {
+      const score = document.createElement('div');
+      score.className = 'compare-score';
+      score.textContent = `${Math.round(Number(side.confidence) * 100)}%`;
+      cell.appendChild(score);
+    }
+    return cell;
+  }
+
+  function formatCompare(value) {
+    if (typeof value === 'number') {
+      return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(value);
+    }
+    return String(value);
   }
 
   async function probe() {
     setBusy(true);
     try {
-      const response = await fetch('/api/status?probe=1');
+      const response = await fetch(`/api/status?probe=1&source=${encodeURIComponent(selectedSource())}`);
       const body = await readJson(response);
       renderConnection(body);
-      showMessage('positive', `Connection succeeded. Token host ${body.tokenHost}.`);
+      if (selectedSource() === 'both') {
+        const problems = [body.aiCore, body.documentAi].filter(item => item && item.ok === false).map(item => item.error);
+        if (problems.length) showMessage('negative', problems.join(' '));
+        else showMessage('positive', 'Document AI and AI Core both accepted their service keys.');
+      } else {
+        const host = (body.aiCore && body.aiCore.tokenHost) || (body.documentAi && body.documentAi.tokenHost) || body.tokenHost;
+        showMessage('positive', `Connection succeeded. Token host ${host}.`);
+      }
     } catch (error) {
       const node = document.getElementById('connection');
       node.classList.remove('ready', 'warn');

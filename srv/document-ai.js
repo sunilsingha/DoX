@@ -139,10 +139,108 @@ function missingKeys(config) {
   return missing;
 }
 
+function documentAiStatus() {
+  const config = loadConfig();
+  const missing = missingKeys(config);
+  return {
+    configured: missing.length === 0,
+    missing,
+    tokenHost: hostOf(config.tokenUrl),
+    apiHost: hostOf(config.apiUrl),
+    doxClient: config.doxClient || 'default',
+    template: config.template || ''
+  };
+}
+
 function publicStatus() {
   return {
     ...aiCore.publicStatus(),
-    schemaFile: path.relative(projectRoot(), activeSchemaPath())
+    schemaFile: path.relative(projectRoot(), activeSchemaPath()),
+    documentAi: documentAiStatus()
+  };
+}
+
+function sourceFrom(value) {
+  const source = String(value || 'aicore').toLowerCase();
+  if (source === 'document' || source === 'document-ai' || source === 'dox') return 'document';
+  if (source === 'both' || source === 'compare') return 'both';
+  return 'aicore';
+}
+
+function comparable(value) {
+  if (value == null) return '';
+  const text = String(value).trim().replace(/\s+/g, ' ');
+  if (!text || text === '—' || text === '-') return '';
+  const numeric = text.replace(/[₹$€£,\s]/g, '');
+  if (/^-?\d+(\.\d+)?$/.test(numeric)) {
+    const number = Number(numeric);
+    if (Number.isFinite(number)) return `n:${number}`;
+  }
+  return `s:${text.toLowerCase()}`;
+}
+
+function compareState(left, right) {
+  const a = comparable(left);
+  const b = comparable(right);
+  if (!a && !b) return 'empty';
+  return a === b ? 'match' : 'differ';
+}
+
+function compareFields(leftFields, rightFields) {
+  const left = new Map((leftFields || []).map(field => [field.name, field]));
+  const right = new Map((rightFields || []).map(field => [field.name, field]));
+  const names = [];
+  (leftFields || []).forEach(field => {
+    if (field && field.name && !names.includes(field.name)) names.push(field.name);
+  });
+  (rightFields || []).forEach(field => {
+    if (field && field.name && !names.includes(field.name)) names.push(field.name);
+  });
+  return names.map(name => {
+    const documentField = left.get(name) || {};
+    const coreField = right.get(name) || {};
+    return {
+      name,
+      label: documentField.label || coreField.label || name,
+      documentAi: {
+        value: documentField.value == null ? '' : documentField.value,
+        confidence: documentField.confidence == null ? null : documentField.confidence
+      },
+      aiCore: {
+        value: coreField.value == null ? '' : coreField.value,
+        confidence: coreField.confidence == null ? null : coreField.confidence
+      },
+      state: compareState(documentField.value, coreField.value)
+    };
+  });
+}
+
+function compareExtractions(documentSide, coreSide) {
+  const header = compareFields(documentSide && documentSide.header, coreSide && coreSide.header);
+  const leftLines = (documentSide && documentSide.lineItems) || [];
+  const rightLines = (coreSide && coreSide.lineItems) || [];
+  const count = Math.max(leftLines.length, rightLines.length);
+  const lineItems = [];
+  for (let index = 0; index < count; index += 1) {
+    const fields = compareFields(leftLines[index], rightLines[index]);
+    let state = 'empty';
+    if (fields.some(field => field.state === 'differ')) state = 'differ';
+    else if (fields.some(field => field.state === 'match')) state = 'match';
+    lineItems.push({ index: index + 1, state, fields });
+  }
+  const all = header.concat(...lineItems.map(line => line.fields));
+  return {
+    header,
+    lineItems,
+    summary: {
+      match: all.filter(field => field.state === 'match').length,
+      differ: all.filter(field => field.state === 'differ').length,
+      empty: all.filter(field => field.state === 'empty').length,
+      headerDiffer: header.filter(field => field.state === 'differ').length,
+      headerMatch: header.filter(field => field.state === 'match').length,
+      documentLines: leftLines.length,
+      coreLines: rightLines.length
+    }
   };
 }
 
@@ -766,6 +864,129 @@ function requestFile(file) {
   return { name: file.originalname || '', size: file.size || 0 };
 }
 
+async function probeAiCore() {
+  const config = aiCore.loadConfig();
+  const missing = aiCore.missingKeys(config);
+  if (missing.length) return { ok: false, error: `Add these to default-env.json: ${missing.join(', ')}.` };
+  try {
+    await aiCore.getToken(config);
+    return { ok: true, tokenHost: hostOf(config.tokenUrl) };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+async function probeDocumentAi() {
+  const status = documentAiStatus();
+  if (!status.configured) return { ok: false, error: `Add these to default-env.json: ${status.missing.join(', ')}.` };
+  try {
+    await getToken(loadConfig());
+    return { ok: true, tokenHost: status.tokenHost };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+async function settle(work) {
+  try {
+    return await work();
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message || 'Extraction failed.',
+      detail: error.detail || '',
+      status: 'FAILED',
+      header: [],
+      lineItems: []
+    };
+  }
+}
+
+async function extractWithDocumentAi(file, schema, body) {
+  const options = buildOptions({
+    schema,
+    doxClient: body.doxClient || loadConfig().doxClient,
+    template: body.template || loadConfig().template,
+    schemaName: body.schemaName || schema.name,
+    schemaVersion: body.schemaVersion || schema.version,
+    documentType: body.documentType || schema.documentType
+  });
+  const live = await extractLive({
+    buffer: file.buffer,
+    filename: file.originalname,
+    mediaType: file.mimetype,
+    options
+  });
+  const merged = mergeExtraction(schema, live.payload);
+  return {
+    ok: true,
+    status: live.status,
+    jobId: live.jobId,
+    header: merged.header,
+    lineItems: merged.lineItems
+  };
+}
+
+async function extractWithAiCore(file, schema, body) {
+  const live = await aiCore.extractDocument({
+    buffer: file.buffer,
+    filename: file.originalname,
+    schema,
+    resourceGroup: body.resourceGroup,
+    deploymentId: body.deploymentId
+  });
+  return {
+    ok: true,
+    status: 'DONE',
+    jobId: null,
+    header: live.header,
+    lineItems: live.lineItems,
+    deploymentId: live.deploymentId,
+    resourceGroup: live.resourceGroup
+  };
+}
+
+function sampleSide(sample) {
+  return { ok: true, status: 'DONE', jobId: null, header: sample.header, lineItems: sample.lineItems };
+}
+
+function singleResponse(source, file, schema, live) {
+  return {
+    mode: 'live',
+    source,
+    jobId: live.jobId || null,
+    status: live.status,
+    file: requestFile(file),
+    schema: schemaSummary(schema),
+    header: live.header,
+    lineItems: live.lineItems
+  };
+}
+
+function compareResponse(schema, file, documentSide, coreSide, sample) {
+  return {
+    mode: 'compare',
+    source: 'both',
+    sample: Boolean(sample),
+    file: requestFile(file),
+    schema: schemaSummary(schema),
+    documentAi: {
+      ok: documentSide.ok !== false,
+      error: documentSide.error || '',
+      detail: documentSide.detail || '',
+      status: documentSide.status || '',
+      jobId: documentSide.jobId || null
+    },
+    aiCore: {
+      ok: coreSide.ok !== false,
+      error: coreSide.error || '',
+      detail: coreSide.detail || '',
+      status: coreSide.status || ''
+    },
+    comparison: compareExtractions(documentSide, coreSide)
+  };
+}
+
 function registerRoutes(app) {
   const pdfjsRoot = path.join(projectRoot(), 'node_modules', 'pdfjs-dist');
   app.use('/vendor/pdfjs/standard_fonts', express.static(path.join(pdfjsRoot, 'standard_fonts')));
@@ -781,16 +1002,27 @@ function registerRoutes(app) {
     try {
       res.set('Cache-Control', 'no-store');
       if (req.query.probe === '1') {
-        const config = aiCore.loadConfig();
-        const missing = aiCore.missingKeys(config);
-        if (missing.length) {
-          return res.status(400).json({
-            ok: false,
-            error: `Add these to default-env.json: ${missing.join(', ')}.`
+        const source = sourceFrom(req.query.source);
+        if (source === 'both') {
+          const [core, document] = await Promise.all([
+            probeAiCore(),
+            probeDocumentAi()
+          ]);
+          return res.json({
+            ok: core.ok && document.ok,
+            ...publicStatus(),
+            aiCore: core,
+            documentAi: { ...documentAiStatus(), ...document }
           });
         }
-        await aiCore.getToken(config);
-        return res.json({ ok: true, ...publicStatus() });
+        if (source === 'document') {
+          const document = await probeDocumentAi();
+          if (!document.ok) return res.status(400).json({ ok: false, error: document.error, documentAi: document });
+          return res.json({ ok: true, ...publicStatus(), documentAi: { ...documentAiStatus(), ...document } });
+        }
+        const core = await probeAiCore();
+        if (!core.ok) return res.status(400).json({ ok: false, error: core.error });
+        return res.json({ ok: true, ...publicStatus(), aiCore: core });
       }
       res.json(publicStatus());
     } catch (error) {
@@ -853,36 +1085,28 @@ function registerRoutes(app) {
         res.set('Cache-Control', 'no-store');
         const schema = loadSchemaSync();
         const mode = String(req.body.mode || 'live').toLowerCase();
+        const source = sourceFrom(req.body.source);
         if (mode === 'sample') {
-          return res.json(buildSampleResult(schema, req.file));
+          const sample = buildSampleResult(schema, req.file);
+          if (source === 'both') return res.json(compareResponse(schema, req.file, sampleSide(sample), sampleSide(sample), true));
+          return res.json({ ...sample, source });
         }
         if (!req.file) {
           return res.status(400).json({ error: 'Choose an invoice file first, or preview the sample.' });
         }
-        const live = await aiCore.extractDocument({
-          buffer: req.file.buffer,
-          filename: req.file.originalname,
-          schema,
-          resourceGroup: req.body.resourceGroup,
-          deploymentId: req.body.deploymentId
-        });
-        return res.json({
-          mode: 'live',
-          jobId: null,
-          status: 'DONE',
-          file: requestFile(req.file),
-          schema: schemaSummary(schema),
-          request: {
-            options: {
-              schemaName: schema.name,
-              schemaVersion: schema.version,
-              deploymentId: live.deploymentId,
-              resourceGroup: live.resourceGroup
-            }
-          },
-          header: live.header,
-          lineItems: live.lineItems
-        });
+        if (source === 'both') {
+          const [documentSide, coreSide] = await Promise.all([
+            settle(() => extractWithDocumentAi(req.file, schema, req.body)),
+            settle(() => extractWithAiCore(req.file, schema, req.body))
+          ]);
+          return res.json(compareResponse(schema, req.file, documentSide, coreSide, false));
+        }
+        if (source === 'document') {
+          const live = await extractWithDocumentAi(req.file, schema, req.body);
+          return res.json(singleResponse('document', req.file, schema, live));
+        }
+        const live = await extractWithAiCore(req.file, schema, req.body);
+        return res.json(singleResponse('aicore', req.file, schema, live));
       } catch (error) {
         return sendError(res, error);
       }
@@ -908,6 +1132,8 @@ module.exports = {
   publicStatus,
   customSchemaChoices,
   listLocalSchemas,
+  compareExtractions,
+  sourceFrom,
   registerRoutes,
   sampleLines,
   sampleHeader

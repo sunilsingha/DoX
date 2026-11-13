@@ -206,6 +206,50 @@ h2 { font-size: 1.125rem; }
 .status-pill.warn { background: var(--sapWarningBg); color: var(--sapCritical); }
 .status-pill.bad { background: var(--sapErrorBg); color: var(--sapNegative); }
 
+.status-row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+.source-field { margin-top: 0.8rem; }
+.source-field > span { display: block; margin-bottom: 0.3rem; color: var(--sapLabelColor); font-size: 0.75rem; }
+.source-toggle {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid #bcc3ca;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.source-toggle label {
+  position: relative;
+  margin: 0;
+  padding: 0.45rem 0.3rem;
+  text-align: center;
+  cursor: pointer;
+  border-right: 1px solid #bcc3ca;
+  font-size: 0.8125rem;
+}
+.source-toggle label:last-child { border-right: 0; }
+.source-toggle input { position: absolute; opacity: 0; }
+.source-toggle label:has(input:checked) { background: var(--sapBrandColor); color: #fff; }
+.source-toggle label:has(input:focus-visible) { outline: 2px solid var(--sapBrandColor); outline-offset: -2px; }
+
+.compare-lines-title { margin: 1.25rem 0 0.2rem; font-size: 1.15rem; font-weight: 400; }
+.compare-line { margin-top: 0.85rem; }
+.compare-line h4 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+.compare-line table { width: 100%; border-collapse: collapse; }
+#compare-header, .compare-line table { table-layout: fixed; width: 100%; }
+.compare-line th, .compare-line td, #compare-header th, #compare-header td {
+  border-bottom: 1px solid var(--sapListBorder);
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#compare-header thead th:first-child, .compare-line th, #compare-header tbody th { width: 28%; font-weight: 600; }
+tr.differ td, tr.differ th { background: #fff4e6; }
+tr.match td { background: #f3faf4; }
+.compare-score { color: var(--sapLabelColor); font-size: 0.75rem; }
+#compare-errors .strip { margin-top: 0.5rem; }
+
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.9rem; }
 
 .btn {

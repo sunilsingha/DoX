@@ -1,4 +1,10 @@
 {
+  "DOX_UAA_URL": "https://<subdomain>.authentication.<region>.hana.ondemand.com",
+  "DOX_UAA_CLIENTID": "<uaa.clientid from the Document AI service key>",
+  "DOX_UAA_CLIENTSECRET": "<uaa.clientsecret from the Document AI service key>",
+  "DOX_URL": "https://<service-url>",
+  "DOX_CLIENT": "default",
+  "DOX_TEMPLATE": "",
   "AICORE_AUTH_URL": "https://<subdomain>.authentication.<region>.hana.ondemand.com",
   "AICORE_CLIENT_ID": "<clientid from the SAP AI Core service key>",
   "AICORE_CLIENT_SECRET": "<clientsecret from the SAP AI Core service key>",
