@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, pickDeployment, chatPayload, reasoningModel } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -28,6 +28,79 @@ const prompt = extractionPrompt(loadSchemaSync());
 assert.ok(prompt.includes('invoiceNumber'));
 assert.ok(prompt.includes('hsnCode'));
 assert.ok(prompt.includes('ZSFL_GST_Invoice'));
+
+assert.strictEqual(isChatModel('gpt-4o'), true);
+assert.strictEqual(isChatModel('gpt-4o-mini'), true);
+assert.strictEqual(isChatModel('text-embedding-3-large'), false);
+assert.strictEqual(isChatModel('gpt-4o-realtime'), false);
+assert.strictEqual(reasoningModel('o4-mini'), true);
+assert.strictEqual(reasoningModel('gpt-5.4'), true);
+assert.strictEqual(reasoningModel('gpt-4o'), false);
+
+const supported = supportedModelNames({
+  parameters: [{
+    name: 'modelName',
+    description: 'supportedModels: text-embedding-3-large, gpt-4o-mini, gpt-4o, gpt-4o-realtime, gpt-4.1, gpt-4.1-mini, o4-mini'
+  }]
+});
+assert.ok(supported.includes('gpt-4o'));
+assert.ok(supported.includes('o4-mini'));
+assert.ok(supported.includes('text-embedding-3-large'));
+assert.ok(supported.includes('gpt-4o-realtime'));
+
+const catalog = joinModelCatalog({
+  configurations: [
+    {
+      id: 'cfg-mini',
+      name: 'mini',
+      scenarioId: 'foundation-models',
+      executableId: 'azure-openai',
+      parameterBindings: [
+        { key: 'modelName', value: 'gpt-4o-mini' },
+        { key: 'modelVersion', value: 'latest' }
+      ]
+    },
+    {
+      id: 'cfg-embed',
+      scenarioId: 'foundation-models',
+      executableId: 'azure-openai',
+      parameterBindings: [{ key: 'modelName', value: 'text-embedding-3-large' }]
+    }
+  ],
+  deployments: [
+    { id: 'dep-mini', configurationId: 'cfg-mini', status: 'RUNNING', scenarioId: 'foundation-models' },
+    { id: 'dep-stopped', configurationId: 'cfg-mini', status: 'STOPPED', scenarioId: 'foundation-models' },
+    { id: 'dep-embed', configurationId: 'cfg-embed', status: 'RUNNING', scenarioId: 'foundation-models' }
+  ],
+  supportedNames: supported
+});
+assert.ok(catalog.some(item => item.modelName === 'gpt-4o-mini' && item.deployed && item.deploymentId === 'dep-mini'));
+assert.ok(catalog.some(item => item.modelName === 'gpt-4o' && item.deployed === false));
+assert.ok(!catalog.some(item => item.modelName.includes('embedding')));
+assert.ok(!catalog.some(item => item.modelName.includes('realtime')));
+assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', '').deploymentId, 'dep-mini');
+assert.strictEqual(pickDeployment(catalog, 'gpt-4o', ''), null);
+
+const miniPayload = chatPayload('gpt-4o-mini', 'extract');
+assert.strictEqual(miniPayload.temperature, 0);
+assert.strictEqual(miniPayload.max_tokens, 4096);
+const reasoningPayload = chatPayload('o4-mini', 'extract');
+assert.strictEqual(reasoningPayload.temperature, undefined);
+assert.strictEqual(reasoningPayload.max_completion_tokens, 4096);
+
+const detailCatalog = joinModelCatalog({
+  configurations: [],
+  deployments: [{
+    id: 'dep-detail',
+    configurationId: 'missing',
+    status: 'RUNNING',
+    scenarioId: 'foundation-models',
+    details: { resources: { backendDetails: { model: { name: 'gpt-4.1', version: '2025-04-14' } } } }
+  }],
+  supportedNames: []
+});
+assert.strictEqual(detailCatalog[0].modelName, 'gpt-4.1');
+assert.strictEqual(detailCatalog[0].modelVersion, '2025-04-14');
 
 const status = publicStatus();
 assert.ok(Array.isArray(status.missing));

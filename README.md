@@ -56,6 +56,8 @@ Open SAP AI Launchpad with a user that has `mloperations_editor` or `genai_manag
 
 Deploy the model itself. An orchestration deployment is a different endpoint. This app calls the model deployment's chat completions API, not orchestration.
 
+The executable lists every model that provider can run, including `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`. A deployment still serves only the `modelName` saved on its configuration. To change models from the page, create one configuration and one RUNNING deployment per model. The Model menu reads those deployments and sends the invoice to the one you pick. Configured deployment keeps using `AICORE_DEPLOYMENT_ID`. Embedding and realtime models are not offered. A model shown as not deployed needs its own configuration before it can be selected.
+
 ## 4. Schemas
 
 Put one JSON export in `schema/` for each document type. The Schema menu lists those files. Choosing one loads its header and line-item columns and uses that field list in the prompt. The GST invoice and a letter of credit are two files. The model does not decide which schema to use.
@@ -79,7 +81,7 @@ Use Test connection before the first invoice. A success message means the servic
 
 1. Choose the schema.
 2. Drop a digital PDF, PNG, or JPEG. Up to 20 MB.
-3. Open Request options if you need a different resource group or deployment ID than the values in `default-env.json`.
+3. Choose a model when AI Core or Compare both is selected. Configured deployment uses `AICORE_DEPLOYMENT_ID`. Open Request options to use a different resource group.
 4. Press Extract invoice.
 
 A PDF is sent to the model with the field list, so the model reads the pages itself. If that deployment refuses a PDF attachment, the app reads the text from the file and sends the text instead. A PNG or JPEG is sent as an image. TIFF is not accepted.

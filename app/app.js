@@ -4,7 +4,9 @@
     header: [],
     lineItems: [],
     currency: 'INR',
-    busy: false
+    busy: false,
+    configuredDeploymentId: '',
+    models: []
   };
 
   const dropzone = document.getElementById('dropzone');
@@ -23,6 +25,8 @@
     input.addEventListener('change', syncSourceFields);
   });
   syncSourceFields();
+  document.getElementById('model-name').addEventListener('change', applyModelChoice);
+  document.getElementById('resource-group').addEventListener('change', () => loadModels());
   document.getElementById('extract').addEventListener('click', () => extract('live'));
   document.getElementById('sample').addEventListener('click', () => extract('sample'));
   document.getElementById('probe').addEventListener('click', probe);
@@ -68,7 +72,7 @@
       ]);
       applySchema(schema);
       renderConnection(status);
-      await loadSchemaChoices();
+      await Promise.all([loadSchemaChoices(), loadModels()]);
     } catch (error) {
       showMessage('negative', error.message);
     }
@@ -186,10 +190,10 @@
       hint.innerHTML = 'Document AI extracts with the schema name and version. The client is usually <code>default</code>. A template is required when the schema fields use manual setup.';
       extract.textContent = 'Extract invoice';
     } else if (source === 'both') {
-      hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. Fill in the AI Core deployment and the Document AI client before extracting.';
+      hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. The Model menu chooses which running AI Core deployment to compare with Document AI.';
       extract.textContent = 'Extract with both';
     } else {
-      hint.innerHTML = 'AI Core sends the schema fields to the deployed model. Resource group is usually <code>default</code>. Deployment ID is the running foundation-model deployment.';
+      hint.innerHTML = 'AI Core sends the schema fields to the model selected above. Configured deployment uses the deployment ID in <code>default-env.json</code>.';
       extract.textContent = 'Extract invoice';
     }
   }
@@ -205,10 +209,75 @@
     }
   }
 
+  function selectedModel() {
+    const select = document.getElementById('model-name');
+    const option = select.selectedOptions && select.selectedOptions[0];
+    if (!option || !option.value) return { modelName: '', deploymentId: '' };
+    return {
+      modelName: option.dataset.modelName || '',
+      deploymentId: option.dataset.deploymentId || ''
+    };
+  }
+
+  function applyModelChoice() {
+    const choice = selectedModel();
+    const deployment = document.getElementById('deployment-id');
+    if (choice.deploymentId) deployment.value = choice.deploymentId;
+    else if (state.configuredDeploymentId) deployment.value = state.configuredDeploymentId;
+  }
+
+  function fillModelSelect(models, previous) {
+    const select = document.getElementById('model-name');
+    const current = previous != null ? previous : select.value;
+    select.replaceChildren();
+    const fallback = document.createElement('option');
+    fallback.value = '';
+    fallback.textContent = 'Configured deployment';
+    select.appendChild(fallback);
+    models.forEach(model => {
+      const option = document.createElement('option');
+      option.value = model.deployed ? model.deploymentId : `unavailable:${model.modelName}`;
+      option.disabled = !model.deployed;
+      option.dataset.modelName = model.modelName;
+      option.dataset.deploymentId = model.deploymentId || '';
+      const copies = models.filter(item => item.deployed && item.modelName === model.modelName).length;
+      const version = model.modelVersion && model.modelVersion !== 'latest' ? ` · ${model.modelVersion}` : '';
+      const suffix = copies > 1 && model.deploymentId ? ` · ${model.deploymentId.slice(0, 8)}` : '';
+      option.textContent = model.deployed ? `${model.modelName}${version}${suffix}` : `${model.modelName} (not deployed)`;
+      select.appendChild(option);
+    });
+    if ([...select.options].some(option => option.value === current && !option.disabled)) select.value = current;
+    applyModelChoice();
+  }
+
+  async function loadModels() {
+    const note = document.getElementById('model-note');
+    const select = document.getElementById('model-name');
+    const previous = select.value;
+    const group = document.getElementById('resource-group').value.trim();
+    try {
+      const response = await fetch(`/api/models?resourceGroup=${encodeURIComponent(group)}`);
+      const body = await readJson(response);
+      state.models = body.models || [];
+      fillModelSelect(state.models, previous);
+      const running = state.models.filter(model => model.deployed);
+      if (body.error) note.textContent = body.error;
+      else if (!running.length) {
+        note.textContent = 'No chat models are running in this resource group yet. Configured deployment uses the deployment ID in Request options. Deploy another azure-openai configuration to add a model here.';
+      } else {
+        note.textContent = 'A running deployment serves one modelName. Pick a model to call that deployment. A model marked not deployed needs its own configuration in AI Launchpad.';
+      }
+    } catch (error) {
+      fillModelSelect([], '');
+      note.textContent = error.message;
+    }
+  }
+
   function renderConnection(status) {
     document.getElementById('resource-group').value = status.resourceGroup || 'default';
+    if (status.deploymentId) state.configuredDeploymentId = status.deploymentId;
     if (!document.getElementById('deployment-id').value) {
-      document.getElementById('deployment-id').value = status.deploymentId || '';
+      document.getElementById('deployment-id').value = state.configuredDeploymentId;
     }
     const documentStatus = status.documentAi || {};
     if (!document.getElementById('dox-client').value) {
@@ -392,8 +461,10 @@
     form.set('schemaName', document.getElementById('schema-name').value.trim());
     form.set('schemaVersion', document.getElementById('schema-version').value.trim());
     form.set('documentType', document.getElementById('document-type').value);
+    const choice = selectedModel();
     form.set('resourceGroup', document.getElementById('resource-group').value.trim());
-    form.set('deploymentId', document.getElementById('deployment-id').value.trim());
+    form.set('modelName', choice.modelName);
+    form.set('deploymentId', choice.deploymentId || document.getElementById('deployment-id').value.trim());
     form.set('doxClient', document.getElementById('dox-client').value.trim());
     form.set('template', document.getElementById('template').value.trim());
     if (file) form.set('file', file);
@@ -438,11 +509,12 @@
       return;
     }
     const job = result.jobId ? ` Job ${result.jobId}.` : '';
+    const model = result.modelName ? ` Model ${result.modelName}.` : '';
     if (!filled) {
-      showMessage('critical', `${sourceName} finished with no values.${job}`);
+      showMessage('critical', `${sourceName} finished with no values.${job}${model}`);
       return;
     }
-    showMessage('positive', `${sourceName} extraction ${result.status}.${job}`);
+    showMessage('positive', `${sourceName} extraction ${result.status}.${job}${model}`);
   }
 
   function renderComparison(result) {
@@ -451,9 +523,10 @@
     panel.hidden = false;
     const comparison = result.comparison || { header: [], lineItems: [], summary: {} };
     const summary = comparison.summary || {};
+    const model = result.aiCore && result.aiCore.modelName ? ` AI Core model: ${result.aiCore.modelName}.` : '';
     document.getElementById('compare-summary').textContent = result.sample
       ? `Sample only. ${summary.headerMatch || 0} header fields match and ${summary.headerDiffer || 0} differ.`
-      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.`;
+      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.${model}`;
     const errors = document.getElementById('compare-errors');
     errors.replaceChildren();
     if (result.documentAi && result.documentAi.ok === false) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
@@ -876,6 +949,7 @@
       button.disabled = busy;
     });
     document.getElementById('schema-name').disabled = busy;
+    document.getElementById('model-name').disabled = busy;
   }
 
   async function readJson(response) {

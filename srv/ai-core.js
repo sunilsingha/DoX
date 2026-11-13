@@ -421,25 +421,270 @@ function mapExtraction(schema, parsed) {
   return { header, lineItems };
 }
 
+function parameterValue(bindings, key) {
+  const wanted = String(key).toLowerCase();
+  const found = (Array.isArray(bindings) ? bindings : []).find(item => {
+    const name = String((item && (item.key || item.name)) || '').toLowerCase();
+    return name === wanted;
+  });
+  if (!found || found.value == null) return '';
+  return String(found.value).trim();
+}
+
+function modelFromDeployment(deployment) {
+  const resources = deployment && deployment.details && deployment.details.resources;
+  const backend = (resources && (resources.backendDetails || resources.backend_details)) || {};
+  const model = backend.model || {};
+  return {
+    modelName: String(model.name || '').trim(),
+    modelVersion: String(model.version || '').trim()
+  };
+}
+
+function isChatModel(name) {
+  const model = String(name || '').trim().toLowerCase();
+  if (!model) return false;
+  if (model.includes('embed')) return false;
+  if (model.includes('realtime')) return false;
+  if (model.includes('whisper') || model.includes('tts') || model.includes('dall') || model.includes('transcrib')) return false;
+  return true;
+}
+
+function reasoningModel(modelName) {
+  const name = String(modelName || '').trim().toLowerCase();
+  return /^o\d/.test(name) || name.startsWith('gpt-5');
+}
+
+function supportedModelNames(executable) {
+  const parameters = (executable && (executable.parameters || executable.parameterDefinitions)) || [];
+  const model = parameters.find(item => String(item && item.name || '').toLowerCase() === 'modelname');
+  const text = String((model && model.description) || '');
+  const match = text.match(/supportedModels:\s*([\s\S]+)/i);
+  if (!match) return [];
+  return match[1]
+    .replace(/\.\.\..*$/, '')
+    .split(/[,\n]/)
+    .map(item => item.replace(/\.$/, '').trim())
+    .filter(item => item && !/\s/.test(item));
+}
+
+function joinModelCatalog({ configurations, deployments, supportedNames }) {
+  const configs = new Map((configurations || []).filter(item => item && item.id).map(item => [item.id, item]));
+  const deployed = [];
+  (deployments || []).forEach(deployment => {
+    if (!deployment || String(deployment.status || '').toUpperCase() !== 'RUNNING') return;
+    const configuration = configs.get(deployment.configurationId) || {};
+    const bindings = configuration.parameterBindings || deployment.parameterBindings || [];
+    const fromDetails = modelFromDeployment(deployment);
+    const modelName = parameterValue(bindings, 'modelName') || fromDetails.modelName;
+    const modelVersion = parameterValue(bindings, 'modelVersion') || fromDetails.modelVersion || 'latest';
+    const scenarioId = configuration.scenarioId || deployment.scenarioId || '';
+    if (scenarioId && scenarioId !== 'foundation-models') return;
+    if (!isChatModel(modelName)) return;
+    deployed.push({
+      modelName,
+      modelVersion,
+      deploymentId: deployment.id,
+      executableId: configuration.executableId || deployment.executableId || 'azure-openai',
+      configurationName: configuration.name || deployment.configurationName || '',
+      deployed: true
+    });
+  });
+  const seen = new Set(deployed.map(item => item.modelName.toLowerCase()));
+  const missing = [];
+  (supportedNames || []).forEach(name => {
+    const modelName = String(name || '').trim();
+    if (!isChatModel(modelName) || seen.has(modelName.toLowerCase())) return;
+    seen.add(modelName.toLowerCase());
+    missing.push({
+      modelName,
+      modelVersion: 'latest',
+      deploymentId: '',
+      executableId: 'azure-openai',
+      configurationName: '',
+      deployed: false
+    });
+  });
+  return deployed.concat(missing).sort((left, right) => {
+    if (left.deployed !== right.deployed) return left.deployed ? -1 : 1;
+    return left.modelName.localeCompare(right.modelName);
+  });
+}
+
+function pickDeployment(models, modelName, deploymentId) {
+  const wanted = String(modelName || '').trim().toLowerCase();
+  if (!wanted) return null;
+  const matches = (models || []).filter(item => item.deployed && item.modelName.toLowerCase() === wanted);
+  if (!matches.length) return null;
+  return matches.find(item => item.deploymentId && item.deploymentId === deploymentId) || matches[0];
+}
+
+function chatPayload(modelName, content) {
+  const payload = {
+    messages: [
+      {
+        role: 'system',
+        content: 'You extract business documents into the requested JSON schema. Reply with JSON only.'
+      },
+      { role: 'user', content }
+    ]
+  };
+  if (reasoningModel(modelName)) payload.max_completion_tokens = 4096;
+  else {
+    payload.temperature = 0;
+    payload.max_tokens = 4096;
+  }
+  return payload;
+}
+
 function inferenceUrl(config, deploymentId) {
   return `${config.apiUrl}/v2/inference/deployments/${encodeURIComponent(deploymentId)}/chat/completions`;
 }
 
-async function completeChat(config, token, group, deployment, content) {
+async function aiCoreGet(config, token, group, pathname, params) {
+  let response;
+  try {
+    response = await axios.get(`${config.apiUrl}${pathname}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'AI-Resource-Group': group,
+        Accept: 'application/json'
+      },
+      params,
+      timeout: 30000,
+      validateStatus: () => true
+    });
+  } catch (error) {
+    throw new AiCoreError(`Could not reach SAP AI Core. ${error.message}`, 502);
+  }
+  if (response.status !== 200) {
+    throw new AiCoreError(
+      `SAP AI Core did not list deployments (${response.status}). ${safeDetail(response.data)}`.trim(),
+      response.status >= 400 && response.status < 500 ? response.status : 502,
+      safeDetail(response.data)
+    );
+  }
+  return response.data || {};
+}
+
+async function listResources(config, token, group, pathname, params) {
+  const resources = [];
+  const seen = new Set();
+  let skip = 0;
+  const top = 100;
+  for (let page = 0; page < 10; page += 1) {
+    const data = await aiCoreGet(config, token, group, pathname, { ...params, $top: top, $skip: skip });
+    const batch = Array.isArray(data.resources) ? data.resources : [];
+    let added = 0;
+    batch.forEach(item => {
+      const id = item && item.id;
+      if (id && seen.has(id)) return;
+      if (id) seen.add(id);
+      resources.push(item);
+      added += 1;
+    });
+    if (!added || batch.length < top) break;
+    skip += batch.length;
+  }
+  return resources;
+}
+
+async function hydrateConfigurations(config, token, group, deployments, listed) {
+  const byId = new Map((listed || []).filter(item => item && item.id).map(item => [item.id, item]));
+  const ids = [...new Set((deployments || []).map(item => item && item.configurationId).filter(Boolean))];
+  await Promise.all(ids.slice(0, 30).map(async id => {
+    const current = byId.get(id);
+    if (current && parameterValue(current.parameterBindings, 'modelName')) return;
+    try {
+      const full = await aiCoreGet(config, token, group, `/v2/lm/configurations/${encodeURIComponent(id)}`);
+      byId.set(id, { ...(current || {}), ...full, id });
+    } catch (error) {
+      /* deployment details can still name the model */
+    }
+  }));
+  return [...byId.values()];
+}
+
+async function readSupportedModels(config, token, group) {
+  try {
+    const executable = await aiCoreGet(config, token, group, '/v2/lm/scenarios/foundation-models/executables/azure-openai');
+    const names = supportedModelNames(executable);
+    if (names.length) return names;
+  } catch (error) {
+    /* the executable description is optional */
+  }
+  try {
+    const data = await aiCoreGet(config, token, group, '/v2/lm/scenarios/foundation-models/executables');
+    const list = data.resources || data.executables || [];
+    const match = list.find(item => String((item && (item.id || item.name)) || '').toLowerCase() === 'azure-openai') || {};
+    return supportedModelNames(match);
+  } catch (error) {
+    return [];
+  }
+}
+
+async function loadCatalog(config, token, group) {
+  const [configurations, deployments, supportedNames] = await Promise.all([
+    listResources(config, token, group, '/v2/lm/configurations', { scenarioId: 'foundation-models' }),
+    listResources(config, token, group, '/v2/lm/deployments', { scenarioId: 'foundation-models', status: 'RUNNING' }),
+    readSupportedModels(config, token, group)
+  ]);
+  const hydrated = await hydrateConfigurations(config, token, group, deployments, configurations);
+  return joinModelCatalog({ configurations: hydrated, deployments, supportedNames });
+}
+
+async function listChatModels({ resourceGroup } = {}) {
+  const config = loadConfig();
+  const group = String(resourceGroup || config.resourceGroup || 'default').trim() || 'default';
+  const missing = missingKeys(config).filter(key => key !== 'AICORE_DEPLOYMENT_ID');
+  if (missing.length) {
+    return {
+      resourceGroup: group,
+      models: [],
+      error: `Add ${missing.join(', ')} to default-env.json to list deployed models.`
+    };
+  }
+  try {
+    const token = await getToken(config);
+    return {
+      resourceGroup: group,
+      models: await loadCatalog(config, token, group),
+      error: ''
+    };
+  } catch (error) {
+    return {
+      resourceGroup: group,
+      models: [],
+      error: error.message || 'Could not list foundation-model deployments.'
+    };
+  }
+}
+
+async function resolveChatDeployment(config, token, group, { modelName, deploymentId }) {
+  const requested = String(modelName || '').trim();
+  const explicit = String(deploymentId || config.deploymentId || '').trim();
+  if (!requested) {
+    if (!explicit) {
+      throw new AiCoreError('Add AICORE_DEPLOYMENT_ID to default-env.json, or choose a deployed model.', 400);
+    }
+    return { deploymentId: explicit, modelName: '', modelVersion: '' };
+  }
+  const models = await loadCatalog(config, token, group);
+  const match = pickDeployment(models, requested, explicit);
+  if (!match) {
+    throw new AiCoreError(
+      `${requested} has no RUNNING deployment in resource group ${group}. The azure-openai executable can use that model, and each modelName needs its own configuration. In AI Launchpad, create a configuration with modelName ${requested} and modelVersion latest, deploy it, and wait until the status is RUNNING.`,
+      400
+    );
+  }
+  return match;
+}
+
+async function completeChat(config, token, group, deployment, content, modelName) {
   const params = {};
   if (config.apiVersion && config.apiVersion.toLowerCase() !== 'none') params['api-version'] = config.apiVersion;
   try {
-    return await axios.post(inferenceUrl(config, deployment), {
-      messages: [
-        {
-          role: 'system',
-          content: 'You extract business documents into the requested JSON schema. Reply with JSON only.'
-        },
-        { role: 'user', content }
-      ],
-      temperature: 0,
-      max_tokens: 4096
-    }, {
+    return await axios.post(inferenceUrl(config, deployment), chatPayload(modelName, content), {
       headers: {
         Authorization: `Bearer ${token}`,
         'AI-Resource-Group': group,
@@ -463,11 +708,12 @@ function failedChat(response) {
   );
 }
 
-async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId }) {
+async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId, modelName }) {
   const config = loadConfig();
+  const requestedModel = String(modelName || '').trim();
   const missing = missingKeys({
     ...config,
-    deploymentId: deploymentId || config.deploymentId
+    deploymentId: deploymentId || config.deploymentId || (requestedModel ? 'selected' : '')
   });
   if (missing.length) {
     throw new AiCoreError(`SAP AI Core is not configured. Add ${missing.join(', ')} to default-env.json.`, 400);
@@ -475,15 +721,17 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   const prepared = await prepareDocument(buffer, filename);
   const token = await getToken(config);
   const group = String(resourceGroup || config.resourceGroup || 'default').trim() || 'default';
-  const deployment = String(deploymentId || config.deploymentId).trim();
-  let response = await completeChat(config, token, group, deployment, userContent(schema, prepared));
+  const resolved = await resolveChatDeployment(config, token, group, { modelName: requestedModel, deploymentId });
+  const deployment = resolved.deploymentId;
+  const model = resolved.modelName;
+  let response = await completeChat(config, token, group, deployment, userContent(schema, prepared), model);
   if (prepared.kind === 'pdf' && [400, 415, 422].includes(response.status)) {
     const text = await readPdfText(buffer);
     if (text.replace(/\s/g, '').length >= 40) {
       response = await completeChat(config, token, group, deployment, userContent(schema, {
         kind: 'text',
         text: text.slice(0, 60000)
-      }));
+      }), model);
     }
   }
   if (response.status !== 200) failedChat(response);
@@ -492,7 +740,8 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   return {
     ...merged,
     deploymentId: deployment,
-    resourceGroup: group
+    resourceGroup: group,
+    modelName: model
   };
 }
 
@@ -508,5 +757,12 @@ module.exports = {
   prepareDocument,
   userContent,
   readPdfText,
-  extractDocument
+  extractDocument,
+  isChatModel,
+  reasoningModel,
+  supportedModelNames,
+  joinModelCatalog,
+  pickDeployment,
+  chatPayload,
+  listChatModels
 };

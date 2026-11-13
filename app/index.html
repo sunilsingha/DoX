@@ -40,6 +40,13 @@
         <label><input type="radio" name="source" value="document" /> SAP Document AI</label>
         <label><input type="radio" name="source" value="both" /> Compare both</label>
       </div>
+      <label class="model-picker for-aicore" for="model-name">
+        Model
+        <select id="model-name">
+          <option value="">Configured deployment</option>
+        </select>
+      </label>
+      <p class="model-note for-aicore" id="model-note">Each running deployment serves the modelName from its configuration.</p>
     </div>
 
     <div id="schema-note" class="strip information" hidden></div>
@@ -226,7 +233,7 @@
         </li>
         <li>
           <strong>Deploy a vision-capable chat model.</strong>
-          In SAP AI Launchpad, select this AI Core runtime and the <code>default</code> resource group. Open ML Operations, then Scenarios, and confirm <code>foundation-models</code> is listed. If it is missing, the instance is not on the extended plan. Create a configuration: scenario <code>foundation-models</code>, the executable for the provider (for GPT models this is <code>azure-openai</code>), parameter <code>modelName</code> <code>gpt-4o</code>, and <code>modelVersion</code> <code>latest</code>. Create a deployment with duration Standard. Wait until the status is RUNNING. Copy the deployment ID into <code>AICORE_DEPLOYMENT_ID</code>. Deploy the model itself. An orchestration-only deployment is a different endpoint and is not what this page calls.
+          In SAP AI Launchpad, select this AI Core runtime and the <code>default</code> resource group. Open ML Operations, then Scenarios, and confirm <code>foundation-models</code> is listed. If it is missing, the instance is not on the extended plan. Create a configuration: scenario <code>foundation-models</code>, the executable for the provider (for GPT models this is <code>azure-openai</code>), parameter <code>modelName</code> <code>gpt-4o</code>, and <code>modelVersion</code> <code>latest</code>. Create a deployment with duration Standard. Wait until the status is RUNNING. Copy the deployment ID into <code>AICORE_DEPLOYMENT_ID</code>. Deploy the model itself. An orchestration-only deployment is a different endpoint and is not what this page calls. One deployment serves only the <code>modelName</code> on its configuration. To switch models from this page, create another configuration for each model, such as <code>gpt-4o-mini</code> or <code>gpt-4.1</code>, and deploy that too. The Model menu lists the RUNNING chat models and calls that deployment. Embedding and realtime models are left out.
         </li>
         <li>
           <strong>Keep one schema file per document type.</strong>
@@ -234,7 +241,7 @@
         </li>
         <li>
           <strong>Extract.</strong>
-          Run <code>npm install</code> and <code>npm start</code>, then open the page. Choose AI Core, Document AI, or Both. Both sends the same file to each service and marks fields that disagree. Test connection checks the selected source. Document AI also needs <code>DOX_UAA_URL</code>, <code>DOX_UAA_CLIENTID</code>, <code>DOX_UAA_CLIENTSECRET</code>, and <code>DOX_URL</code> in <code>default-env.json</code>. Put the activated template name in Request options when the schema fields use manual setup. A PDF is sent to AI Core. A photo or scan should be PNG or JPEG. TIFF is not accepted by the vision model.
+          Run <code>npm install</code> and <code>npm start</code>, then open the page. Choose AI Core, Document AI, or Both. Both sends the same file to each service and marks fields that disagree. With AI Core or Both, the Model menu chooses which running deployment reads the invoice. Configured deployment uses <code>AICORE_DEPLOYMENT_ID</code>. Test connection checks the selected source. Document AI also needs <code>DOX_UAA_URL</code>, <code>DOX_UAA_CLIENTID</code>, <code>DOX_UAA_CLIENTSECRET</code>, and <code>DOX_URL</code> in <code>default-env.json</code>. Put the activated template name in Request options when the schema fields use manual setup. A PDF is sent to AI Core. A photo or scan should be PNG or JPEG. TIFF is not accepted by the vision model.
         </li>
         <li>
           <strong>Read the two tables.</strong>
