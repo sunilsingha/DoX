@@ -95,7 +95,7 @@
         </div>
         <div class="preview-frame" id="preview-frame">
           <p class="preview-empty" id="preview-empty">The uploaded invoice stays here, beside the extracted fields.</p>
-          <iframe id="preview-pdf" title="Uploaded invoice" hidden></iframe>
+          <div id="preview-pages" class="preview-pages" hidden></div>
           <img id="preview-image" alt="" hidden />
           <p class="preview-empty" id="preview-unsupported" hidden></p>
         </div>
@@ -201,6 +201,7 @@ Authorization: Bearer &lt;token&gt;</pre>
     </div>
   </dialog>
 
+  <script src="/vendor/pdfjs/pdf.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

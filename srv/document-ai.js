@@ -767,6 +767,11 @@ function requestFile(file) {
 }
 
 function registerRoutes(app) {
+  const pdfjsRoot = path.join(projectRoot(), 'node_modules', 'pdfjs-dist');
+  app.use('/vendor/pdfjs/standard_fonts', express.static(path.join(pdfjsRoot, 'standard_fonts')));
+  app.use('/vendor/pdfjs/cmaps', express.static(path.join(pdfjsRoot, 'cmaps')));
+  app.use('/vendor/pdfjs', express.static(path.join(pdfjsRoot, 'build')));
+
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 20 * 1024 * 1024 }

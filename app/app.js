@@ -10,7 +10,8 @@
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('file');
   let previewUrl = '';
-  let previewResize = null;
+  let previewGeneration = 0;
+  let previewLoadingTask = null;
   const schemaInput = document.getElementById('schema-file');
   const message = document.getElementById('message');
   const guide = document.getElementById('guide');
@@ -195,19 +196,26 @@
     setPreview(file);
   }
 
+  function clearPdfPreview() {
+    previewGeneration += 1;
+    if (previewLoadingTask) {
+      previewLoadingTask.destroy();
+      previewLoadingTask = null;
+    }
+    const pages = document.getElementById('preview-pages');
+    pages.hidden = true;
+    pages.replaceChildren();
+  }
+
   function setPreview(file) {
     const empty = document.getElementById('preview-empty');
-    const pdf = document.getElementById('preview-pdf');
     const image = document.getElementById('preview-image');
     const unsupported = document.getElementById('preview-unsupported');
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl);
       previewUrl = '';
     }
-    pdf.hidden = true;
-    pdf.removeAttribute('src');
-    pdf.style.width = '';
-    pdf.style.height = '';
+    clearPdfPreview();
     image.hidden = true;
     image.removeAttribute('src');
     unsupported.hidden = true;
@@ -229,16 +237,11 @@
         : 'This file cannot be previewed here. Upload a PDF, PNG, or JPEG.';
       return;
     }
-    previewUrl = URL.createObjectURL(file);
     if (isPdf) {
-      pdf.hidden = false;
-      watchPreviewFrame();
-      requestAnimationFrame(() => {
-        sizePdfFrame();
-        pdf.src = previewUrl + '#toolbar=0&navpanes=0&scrollbar=1&zoom=page-width';
-      });
+      showPdf(file);
       return;
     }
+    previewUrl = URL.createObjectURL(file);
     image.alt = file.name || 'Uploaded invoice';
     image.onerror = () => {
       image.hidden = true;
@@ -249,19 +252,70 @@
     image.hidden = false;
   }
 
-  function sizePdfFrame() {
-    const frame = document.getElementById('preview-frame');
-    const pdf = document.getElementById('preview-pdf');
-    if (!frame || pdf.hidden) return;
-    pdf.style.width = frame.clientWidth + 'px';
-    pdf.style.height = frame.clientHeight + 'px';
-  }
-
-  function watchPreviewFrame() {
-    const frame = document.getElementById('preview-frame');
-    if (previewResize || typeof ResizeObserver === 'undefined') return;
-    previewResize = new ResizeObserver(() => sizePdfFrame());
-    previewResize.observe(frame);
+  async function showPdf(file) {
+    const generation = previewGeneration;
+    const pages = document.getElementById('preview-pages');
+    const unsupported = document.getElementById('preview-unsupported');
+    pages.hidden = false;
+    pages.replaceChildren();
+    const note = document.createElement('p');
+    note.className = 'preview-status';
+    note.textContent = 'Opening the invoice…';
+    pages.appendChild(note);
+    if (!window.pdfjsLib) {
+      pages.hidden = true;
+      unsupported.hidden = false;
+      unsupported.textContent = 'The invoice viewer did not load. Refresh the page and open the PDF again.';
+      return;
+    }
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.js';
+    let data;
+    try {
+      data = new Uint8Array(await file.arrayBuffer());
+    } catch (error) {
+      if (generation !== previewGeneration) return;
+      pages.hidden = true;
+      unsupported.hidden = false;
+      unsupported.textContent = 'This PDF could not be opened in the preview.';
+      return;
+    }
+    if (generation !== previewGeneration) return;
+    const task = window.pdfjsLib.getDocument({
+      data,
+      cMapUrl: '/vendor/pdfjs/cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: '/vendor/pdfjs/standard_fonts/'
+    });
+    previewLoadingTask = task;
+    let documentPdf;
+    try {
+      documentPdf = await task.promise;
+    } catch (error) {
+      if (generation !== previewGeneration) return;
+      pages.hidden = true;
+      unsupported.hidden = false;
+      unsupported.textContent = 'This PDF could not be opened in the preview.';
+      return;
+    }
+    if (generation !== previewGeneration) return;
+    pages.replaceChildren();
+    const count = Math.min(documentPdf.numPages, 8);
+    const width = Math.max(pages.clientWidth - 24, 280);
+    for (let number = 1; number <= count; number += 1) {
+      if (generation !== previewGeneration) return;
+      const page = await documentPdf.getPage(number);
+      const unscaled = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: width / unscaled.width });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      canvas.setAttribute('aria-label', `Invoice page ${number}`);
+      pages.appendChild(canvas);
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: context, viewport }).promise;
+    }
   }
 
   async function extract(mode) {
