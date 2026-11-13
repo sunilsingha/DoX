@@ -31,8 +31,11 @@ assert.ok(prompt.includes('ZSFL_GST_Invoice'));
 
 assert.strictEqual(isChatModel('gpt-4o'), true);
 assert.strictEqual(isChatModel('gpt-4o-mini'), true);
+assert.strictEqual(isChatModel('gemini-2.5-flash'), true);
 assert.strictEqual(isChatModel('text-embedding-3-large'), false);
 assert.strictEqual(isChatModel('gpt-4o-realtime'), false);
+assert.strictEqual(isChatModel('sap-rpt-1-small'), false);
+assert.strictEqual(isChatModel('gemini-2.5-flash-image'), false);
 assert.strictEqual(reasoningModel('o4-mini'), true);
 assert.strictEqual(reasoningModel('gpt-5.4'), true);
 assert.strictEqual(reasoningModel('gpt-4o'), false);
@@ -70,7 +73,14 @@ const catalog = joinModelCatalog({
   deployments: [
     { id: 'dep-mini', configurationId: 'cfg-mini', status: 'RUNNING', scenarioId: 'foundation-models' },
     { id: 'dep-stopped', configurationId: 'cfg-mini', status: 'STOPPED', scenarioId: 'foundation-models' },
-    { id: 'dep-embed', configurationId: 'cfg-embed', status: 'RUNNING', scenarioId: 'foundation-models' }
+    { id: 'dep-embed', configurationId: 'cfg-embed', status: 'RUNNING', scenarioId: 'foundation-models' },
+    {
+      id: 'dep-rpt',
+      status: 'RUNNING',
+      scenarioId: 'foundation-models',
+      executableId: 'sap-rpt',
+      details: { resources: { backendDetails: { model: { name: 'sap-rpt-1-small', version: '1' } } } }
+    }
   ],
   supportedNames: supported
 });
@@ -78,6 +88,7 @@ assert.ok(catalog.some(item => item.modelName === 'gpt-4o-mini' && item.deployed
 assert.ok(!catalog.some(item => item.modelName === 'gpt-4o'));
 assert.ok(!catalog.some(item => item.modelName.includes('embedding')));
 assert.ok(!catalog.some(item => item.modelName.includes('realtime')));
+assert.ok(!catalog.some(item => item.modelName.includes('rpt')));
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', '').deploymentId, 'dep-mini');
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', 'other-deployment'), null);
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o', ''), null);

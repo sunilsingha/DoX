@@ -452,7 +452,19 @@ function modelRole(name) {
   const model = String(name || '').trim().toLowerCase();
   if (!model) return 'unknown';
   if (model.includes('embed')) return 'embedding';
-  if (model.includes('realtime') || model.includes('whisper') || model.includes('tts') || model.includes('dall') || model.includes('transcrib') || model.includes('imagen')) return 'other';
+  if (
+    model.includes('realtime')
+    || model.includes('whisper')
+    || model.includes('tts')
+    || model.includes('dall')
+    || model.includes('transcrib')
+    || model.includes('imagen')
+    || model.includes('-image')
+    || model.endsWith('image')
+    || model.includes('sap-rpt')
+    || model.includes('rpt-')
+    || model.includes('codex')
+  ) return 'other';
   return 'chat';
 }
 

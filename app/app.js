@@ -242,10 +242,18 @@
     };
   }
 
+  function canExtract(name) {
+    const model = String(name || '').trim().toLowerCase();
+    if (!model) return false;
+    if (model.includes('embed') || model.includes('realtime') || model.includes('whisper') || model.includes('tts') || model.includes('dall') || model.includes('transcrib') || model.includes('imagen')) return false;
+    if (model.includes('-image') || model.endsWith('image') || model.includes('sap-rpt') || model.includes('rpt-') || model.includes('codex')) return false;
+    return true;
+  }
+
   function modelsForMenu(models) {
     const list = (models || []).map(item => ({ ...item }));
     const gemini = localGemini();
-    if (gemini) {
+    if (gemini && canExtract(gemini.modelName)) {
       const existing = list.find(item => item.deploymentId === gemini.deploymentId);
       if (existing) {
         existing.modelName = gemini.modelName;
@@ -257,7 +265,7 @@
         list.unshift(gemini);
       }
     }
-    return list.filter(item => item.deployed && item.usable !== false);
+    return list.filter(item => item.deployed && item.usable !== false && canExtract(item.modelName));
   }
 
   function applyModelChoice() {
@@ -270,13 +278,18 @@
   function fillModelSelect(models, previous) {
     const select = document.getElementById('model-name');
     const current = previous != null ? previous : select.value;
-    const menu = modelsForMenu(models);
-    select.replaceChildren();
     const gptId = document.getElementById('deployment-id').value.trim();
-    if (gptId) {
+    const menu = modelsForMenu(models).slice().sort((left, right) => {
+      if (left.deploymentId === gptId) return -1;
+      if (right.deploymentId === gptId) return 1;
+      return left.modelName.localeCompare(right.modelName);
+    });
+    select.replaceChildren();
+    const knownGpt = menu.some(model => model.deploymentId === gptId);
+    if (gptId && !knownGpt) {
       const fallback = document.createElement('option');
       fallback.value = 'gpt';
-      fallback.textContent = `GPT · ${gptId}`;
+      fallback.textContent = 'GPT';
       select.appendChild(fallback);
     }
     menu.forEach(model => {
@@ -285,10 +298,7 @@
       option.dataset.modelName = model.modelName;
       option.dataset.deploymentId = model.deploymentId || '';
       option.dataset.executableId = model.executableId || '';
-      const copies = menu.filter(item => item.modelName === model.modelName).length;
-      const version = model.modelVersion && model.modelVersion !== 'latest' ? ` · ${model.modelVersion}` : '';
-      const suffix = copies > 1 && model.deploymentId ? ` · ${model.deploymentId.slice(0, 8)}` : '';
-      option.textContent = `${model.modelName}${version}${suffix}`;
+      option.textContent = model.modelName;
       select.appendChild(option);
     });
     if ([...select.options].some(option => option.value === current && !option.disabled)) select.value = current;
@@ -307,7 +317,7 @@
       fillModelSelect(state.models, previous === '' ? 'gpt' : previous);
       const shown = modelsForMenu(state.models);
       if (shown.length || document.getElementById('deployment-id').value.trim()) {
-        note.textContent = 'The menu lists running chat deployments only. GPT and Gemini each use their own deployment ID.';
+        note.textContent = 'The menu lists running chat models only.';
       } else if (body.error) note.textContent = body.error;
       else note.textContent = 'No chat model is deployed yet. Add a GPT or Gemini deployment ID under Request options.';
     } catch (error) {
