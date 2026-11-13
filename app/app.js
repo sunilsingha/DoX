@@ -237,13 +237,17 @@
     models.forEach(model => {
       const option = document.createElement('option');
       option.value = model.deployed ? model.deploymentId : `unavailable:${model.modelName}`;
-      option.disabled = !model.deployed;
+      option.disabled = !model.deployed || model.usable === false;
       option.dataset.modelName = model.modelName;
       option.dataset.deploymentId = model.deploymentId || '';
-      const copies = models.filter(item => item.deployed && item.modelName === model.modelName).length;
+      const copies = models.filter(item => item.deployed && item.usable !== false && item.modelName === model.modelName).length;
       const version = model.modelVersion && model.modelVersion !== 'latest' ? ` · ${model.modelVersion}` : '';
       const suffix = copies > 1 && model.deploymentId ? ` · ${model.deploymentId.slice(0, 8)}` : '';
-      option.textContent = model.deployed ? `${model.modelName}${version}${suffix}` : `${model.modelName} (not deployed)`;
+      const blocked = model.deployed && model.usable === false
+        ? (String(model.reason || '').toLowerCase().includes('embedding') ? ' (embedding only)' : ' (cannot extract)')
+        : '';
+      option.title = model.reason || '';
+      option.textContent = model.deployed ? `${model.modelName}${version}${suffix}${blocked}` : `${model.modelName} (not deployed)`;
       select.appendChild(option);
     });
     if ([...select.options].some(option => option.value === current && !option.disabled)) select.value = current;
@@ -260,12 +264,15 @@
       const body = await readJson(response);
       state.models = body.models || [];
       fillModelSelect(state.models, previous);
-      const running = state.models.filter(model => model.deployed);
+      const chatRunning = state.models.filter(model => model.deployed && model.usable !== false);
+      const blocked = state.models.filter(model => model.deployed && model.usable === false);
       if (body.error) note.textContent = body.error;
-      else if (!running.length) {
-        note.textContent = 'No chat models are running in this resource group yet. Configured deployment uses the deployment ID in Request options. Deploy another azure-openai configuration to add a model here.';
+      else if (!chatRunning.length && blocked.length) {
+        note.textContent = 'The running Gemini deployment is an embedding model, so it cannot read an invoice. Deploy the gcp-vertexai executable with modelName gemini-2.5-flash and modelVersion latest, then choose that model here.';
+      } else if (!chatRunning.length) {
+        note.textContent = 'No chat models are running in this resource group yet. Configured deployment uses the deployment ID in Request options.';
       } else {
-        note.textContent = 'A running deployment serves one modelName. Pick a model to call that deployment. A model marked not deployed needs its own configuration in AI Launchpad.';
+        note.textContent = 'GPT models use azure-openai. Gemini chat models, such as gemini-2.5-flash, use gcp-vertexai. A model marked embedding only cannot read an invoice.';
       }
     } catch (error) {
       fillModelSelect([], '');

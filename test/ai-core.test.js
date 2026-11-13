@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, pickDeployment, chatPayload, reasoningModel } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -74,12 +74,49 @@ const catalog = joinModelCatalog({
   ],
   supportedNames: supported
 });
-assert.ok(catalog.some(item => item.modelName === 'gpt-4o-mini' && item.deployed && item.deploymentId === 'dep-mini'));
+assert.ok(catalog.some(item => item.modelName === 'gpt-4o-mini' && item.deployed && item.usable && item.deploymentId === 'dep-mini'));
 assert.ok(catalog.some(item => item.modelName === 'gpt-4o' && item.deployed === false));
-assert.ok(!catalog.some(item => item.modelName.includes('embedding')));
+const embedding = catalog.find(item => item.modelName.includes('embedding'));
+assert.ok(embedding && embedding.deployed && embedding.usable === false);
 assert.ok(!catalog.some(item => item.modelName.includes('realtime')));
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', '').deploymentId, 'dep-mini');
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o', ''), null);
+
+const geminiCatalog = joinModelCatalog({
+  configurations: [{
+    id: 'cfg-gemini',
+    scenarioId: 'foundation-models',
+    executableId: 'gcp-vertexai',
+    parameterBindings: [{ key: 'modelName', value: 'gemini-embedding' }, { key: 'modelVersion', value: 'latest' }]
+  }],
+  deployments: [{
+    id: 'da00bb108e5cec61',
+    configurationId: 'cfg-gemini',
+    status: 'RUNNING',
+    scenarioId: 'foundation-models',
+    executableId: 'gcp-vertexai',
+    details: { resources: { backendDetails: { model: { name: 'gemini-embedding', version: 'latest' } } } }
+  }],
+  supportedNames: [
+    { modelName: 'gemini-2.5-flash', executableId: 'gcp-vertexai' },
+    { modelName: 'gemini-embedding', executableId: 'gcp-vertexai' }
+  ]
+});
+const geminiEmbedding = geminiCatalog.find(item => item.modelName === 'gemini-embedding');
+assert.strictEqual(geminiEmbedding.deploymentId, 'da00bb108e5cec61');
+assert.strictEqual(geminiEmbedding.usable, false);
+assert.strictEqual(providerFor(geminiEmbedding), 'gemini');
+const flash = geminiCatalog.find(item => item.modelName === 'gemini-2.5-flash');
+assert.strictEqual(flash.deployed, false);
+assert.strictEqual(flash.executableId, 'gcp-vertexai');
+const geminiBody = geminiPayload([
+  { type: 'text', text: 'Extract' },
+  { type: 'file', file: { file_data: 'data:application/pdf;base64,JVBERg==' } }
+]);
+assert.strictEqual(geminiBody.contents[0].parts[1].inlineData.mimeType, 'application/pdf');
+assert.strictEqual(geminiBody.generationConfig.responseMimeType, 'application/json');
+const geminiText = messageText({ candidates: [{ content: { parts: [{ text: '{"header":{}}' }] } }] });
+assert.ok(geminiText.includes('header'));
 
 const miniPayload = chatPayload('gpt-4o-mini', 'extract');
 assert.strictEqual(miniPayload.temperature, 0);

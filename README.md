@@ -56,7 +56,9 @@ Open SAP AI Launchpad with a user that has `mloperations_editor` or `genai_manag
 
 Deploy the model itself. An orchestration deployment is a different endpoint. This app calls the model deployment's chat completions API, not orchestration.
 
-The executable lists every model that provider can run, including `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`. A deployment still serves only the `modelName` saved on its configuration. To change models from the page, create one configuration and one RUNNING deployment per model. The Model menu reads those deployments and sends the invoice to the one you pick. Configured deployment keeps using `AICORE_DEPLOYMENT_ID`. Embedding and realtime models are not offered. A model shown as not deployed needs its own configuration before it can be selected.
+The executable lists every model that provider can run, including `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`. A deployment still serves only the `modelName` saved on its configuration. To change models from the page, create one configuration and one RUNNING deployment per model. The Model menu reads those deployments and sends the invoice to the one you pick. Configured deployment keeps using `AICORE_DEPLOYMENT_ID`. Embedding and realtime models are not offered for extraction. A model shown as not deployed needs its own configuration before it can be selected.
+
+Gemini chat models use the same menu. Create a configuration with executable `gcp-vertexai`, `modelName` `gemini-2.5-flash` (or `gemini-2.5-pro`), and `modelVersion` `latest`, then deploy it. The page calls that deployment's `generateContent` endpoint. A deployment whose model is `gemini-embedding` appears as embedding only. It creates vectors and cannot read an invoice.
 
 ## 4. Schemas
 
