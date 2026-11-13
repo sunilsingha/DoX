@@ -186,7 +186,7 @@
         </li>
         <li>
           <strong>Extract.</strong>
-          Run <code>npm install</code> and <code>npm start</code>, then open the page. Test connection checks the service key. Choose the schema, upload a digital PDF or a PNG or JPEG, and press Extract invoice. The app gets a client-credentials token and calls <code>POST /v2/inference/deployments/{id}/chat/completions</code> with header <code>AI-Resource-Group</code>. A digital PDF is read from its text. A photo or scan should be PNG or JPEG so the vision model can see it. TIFF is not accepted by the vision models.
+          Run <code>npm install</code> and <code>npm start</code>, then open the page. Test connection checks the service key. Choose the schema, upload a digital PDF or a PNG or JPEG, and press Extract invoice. The app gets a client-credentials token and calls <code>POST /v2/inference/deployments/{id}/chat/completions</code> with header <code>AI-Resource-Group</code>. A PDF is sent to the model. A photo or scan should be PNG or JPEG. TIFF is not accepted.
         </li>
         <li>
           <strong>Read the two tables.</strong>

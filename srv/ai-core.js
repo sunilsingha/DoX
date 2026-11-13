@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const axios = require('axios');
 
 const IMAGE_TYPES = {
@@ -195,14 +196,90 @@ function extractionPrompt(schema) {
   ].join('\n');
 }
 
-async function pdfText(buffer) {
+function decodePdfLiteral(body) {
+  let out = '';
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (char !== '\\') {
+      out += char;
+      continue;
+    }
+    const next = body[index + 1];
+    if (next == null) break;
+    index += 1;
+    if (next === 'n') out += '\n';
+    else if (next === 'r') out += '\r';
+    else if (next === 't') out += '\t';
+    else if (next >= '0' && next <= '7') {
+      let octal = next;
+      for (let extra = 0; extra < 2; extra += 1) {
+        const digit = body[index + 1];
+        if (digit == null || digit < '0' || digit > '7') break;
+        octal += digit;
+        index += 1;
+      }
+      out += String.fromCharCode(parseInt(octal, 8));
+    } else out += next;
+  }
+  return out;
+}
+
+function textFromContent(content) {
+  const source = content.toString('latin1');
+  if (!/Tj|TJ|'|"/.test(source)) return '';
+  const parts = [];
+  const literals = /\((?:\\.|[^\\)])*\)/g;
+  let match = literals.exec(source);
+  while (match) {
+    const value = decodePdfLiteral(match[0].slice(1, -1)).replace(/\s+/g, ' ').trim();
+    if (value) parts.push(value);
+    match = literals.exec(source);
+  }
+  return parts.join(' ');
+}
+
+function pdfStreamText(buffer) {
+  const source = buffer.toString('latin1');
+  const parts = [];
+  let index = 0;
+  while (index < source.length) {
+    const start = source.indexOf('stream', index);
+    if (start < 0) break;
+    const before = source.slice(Math.max(0, start - 300), start);
+    let dataStart = start + 'stream'.length;
+    if (source[dataStart] === '\r' && source[dataStart + 1] === '\n') dataStart += 2;
+    else if (source[dataStart] === '\n' || source[dataStart] === '\r') dataStart += 1;
+    const end = source.indexOf('endstream', dataStart);
+    if (end < 0) break;
+    let data = Buffer.from(source.slice(dataStart, end), 'latin1');
+    if (data.length && data[data.length - 1] === 0x0a) data = data.subarray(0, data.length - 1);
+    if (data.length && data[data.length - 1] === 0x0d) data = data.subarray(0, data.length - 1);
+    if (/FlateDecode/.test(before)) {
+      try {
+        data = zlib.inflateSync(data);
+      } catch (error) {
+        try {
+          data = zlib.inflateRawSync(data);
+        } catch (rawError) {
+          data = Buffer.alloc(0);
+        }
+      }
+    }
+    const text = textFromContent(data);
+    if (text) parts.push(text);
+    index = end + 'endstream'.length;
+  }
+  return parts.join('\n');
+}
+
+async function pdfjsText(buffer) {
   let pdfjs;
   const log = console.log;
   console.log = () => {};
   try {
     pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
   } catch (error) {
-    throw new AiCoreError('PDF reading is unavailable. Upload a PNG or JPEG of the invoice.', 500);
+    throw new AiCoreError(`The PDF text library failed to load (${error.message}).`, 500);
   } finally {
     console.log = log;
   }
@@ -224,6 +301,16 @@ async function pdfText(buffer) {
   return pages.join('\n');
 }
 
+async function readPdfText(buffer) {
+  try {
+    const text = await pdfjsText(buffer);
+    if (text.replace(/\s/g, '').length >= 40) return text;
+  } catch (error) {
+    /* the model can still receive the PDF, and the plain reader is the backup */
+  }
+  return pdfStreamText(buffer);
+}
+
 async function prepareDocument(buffer, filename) {
   const extension = path.extname(filename || '').toLowerCase();
   if (extension === '.tif' || extension === '.tiff') {
@@ -237,17 +324,11 @@ async function prepareDocument(buffer, filename) {
     };
   }
   if (extension === '.pdf') {
-    let text = '';
-    try {
-      text = await pdfText(buffer);
-    } catch (error) {
-      if (error instanceof AiCoreError) throw error;
-      throw new AiCoreError(`Could not read the PDF. ${error.message}`, 400);
-    }
-    if (text.replace(/\s/g, '').length < 40) {
-      throw new AiCoreError('This PDF has almost no text. Export the page as PNG or JPEG so a vision model can read it.', 400);
-    }
-    return { kind: 'text', text: text.slice(0, 60000) };
+    return {
+      kind: 'pdf',
+      filename: path.basename(filename || 'invoice.pdf'),
+      base64: buffer.toString('base64')
+    };
   }
   throw new AiCoreError('Upload a PDF, PNG, or JPEG invoice.', 400);
 }
@@ -260,6 +341,18 @@ function userContent(schema, prepared) {
       {
         type: 'image_url',
         image_url: { url: `data:${prepared.mediaType};base64,${prepared.base64}` }
+      }
+    ];
+  }
+  if (prepared.kind === 'pdf') {
+    return [
+      { type: 'text', text: prompt },
+      {
+        type: 'file',
+        file: {
+          filename: prepared.filename || 'invoice.pdf',
+          file_data: `data:application/pdf;base64,${prepared.base64}`
+        }
       }
     ];
   }
@@ -332,6 +425,44 @@ function inferenceUrl(config, deploymentId) {
   return `${config.apiUrl}/v2/inference/deployments/${encodeURIComponent(deploymentId)}/chat/completions`;
 }
 
+async function completeChat(config, token, group, deployment, content) {
+  const params = {};
+  if (config.apiVersion && config.apiVersion.toLowerCase() !== 'none') params['api-version'] = config.apiVersion;
+  try {
+    return await axios.post(inferenceUrl(config, deployment), {
+      messages: [
+        {
+          role: 'system',
+          content: 'You extract business documents into the requested JSON schema. Reply with JSON only.'
+        },
+        { role: 'user', content }
+      ],
+      temperature: 0,
+      max_tokens: 4096
+    }, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'AI-Resource-Group': group,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      params,
+      timeout: 180000,
+      validateStatus: () => true
+    });
+  } catch (error) {
+    throw new AiCoreError(`Could not reach SAP AI Core. ${error.message}`, 502);
+  }
+}
+
+function failedChat(response) {
+  throw new AiCoreError(
+    `SAP AI Core did not complete the extraction (${response.status}). ${safeDetail(response.data)}`.trim(),
+    response.status >= 400 && response.status < 500 ? response.status : 502,
+    safeDetail(response.data)
+  );
+}
+
 async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId }) {
   const config = loadConfig();
   const missing = missingKeys({
@@ -345,41 +476,17 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   const token = await getToken(config);
   const group = String(resourceGroup || config.resourceGroup || 'default').trim() || 'default';
   const deployment = String(deploymentId || config.deploymentId).trim();
-  const params = {};
-  if (config.apiVersion && config.apiVersion.toLowerCase() !== 'none') params['api-version'] = config.apiVersion;
-  let response;
-  try {
-    response = await axios.post(inferenceUrl(config, deployment), {
-      messages: [
-        {
-          role: 'system',
-          content: 'You extract business documents into the requested JSON schema. Reply with JSON only.'
-        },
-        { role: 'user', content: userContent(schema, prepared) }
-      ],
-      temperature: 0,
-      max_tokens: 4096
-    }, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'AI-Resource-Group': group,
-        'Content-Type': 'application/json',
-        Accept: 'application/json'
-      },
-      params,
-      timeout: 120000,
-      validateStatus: () => true
-    });
-  } catch (error) {
-    throw new AiCoreError(`Could not reach SAP AI Core. ${error.message}`, 502);
+  let response = await completeChat(config, token, group, deployment, userContent(schema, prepared));
+  if (prepared.kind === 'pdf' && [400, 415, 422].includes(response.status)) {
+    const text = await readPdfText(buffer);
+    if (text.replace(/\s/g, '').length >= 40) {
+      response = await completeChat(config, token, group, deployment, userContent(schema, {
+        kind: 'text',
+        text: text.slice(0, 60000)
+      }));
+    }
   }
-  if (response.status !== 200) {
-    throw new AiCoreError(
-      `SAP AI Core did not complete the extraction (${response.status}). ${safeDetail(response.data)}`.trim(),
-      response.status >= 400 && response.status < 500 ? response.status : 502,
-      safeDetail(response.data)
-    );
-  }
+  if (response.status !== 200) failedChat(response);
   const parsed = parseModelContent(messageText(response.data));
   const merged = mapExtraction(schema, parsed);
   return {
@@ -399,5 +506,7 @@ module.exports = {
   parseModelContent,
   mapExtraction,
   prepareDocument,
+  userContent,
+  readPdfText,
   extractDocument
 };

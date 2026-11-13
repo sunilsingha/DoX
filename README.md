@@ -82,7 +82,7 @@ Use Test connection before the first invoice. A success message means the servic
 3. Open Request options if you need a different resource group or deployment ID than the values in `default-env.json`.
 4. Press Extract invoice.
 
-A digital PDF is read as text (up to five pages) and sent with the field list. A PNG or JPEG is sent as an image so the vision model can see it. A scanned PDF with almost no text is rejected: export the page as PNG or JPEG. TIFF is not accepted.
+A PDF is sent to the model with the field list, so the model reads the pages itself. If that deployment refuses a PDF attachment, the app reads the text from the file and sends the text instead. A PNG or JPEG is sent as an image. TIFF is not accepted.
 
 The server requests a client-credentials token, then sends:
 

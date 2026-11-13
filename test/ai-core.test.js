@@ -1,7 +1,8 @@
 'use strict';
 
 const assert = require('assert');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument } = require('../srv/ai-core');
+const zlib = require('zlib');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -60,8 +61,20 @@ function textPdf(text) {
 }
 
 prepareDocument(textPdf('Invoice ZSFL 26-27 0148 taxable amount 30940 supplier Northwind Components'), 'invoice.pdf').then(async pdf => {
-  assert.strictEqual(pdf.kind, 'text');
-  assert.ok(pdf.text.includes('ZSFL 26-27 0148'));
+  assert.strictEqual(pdf.kind, 'pdf');
+  const content = userContent(schema, pdf);
+  assert.strictEqual(content[1].type, 'file');
+  assert.ok(content[1].file.file_data.startsWith('data:application/pdf;base64,'));
+  const text = await readPdfText(textPdf('Invoice ZSFL 26-27 0148 taxable amount 30940 supplier Northwind Components'));
+  assert.ok(text.includes('ZSFL 26-27 0148'));
+  const compressed = zlib.deflateSync(Buffer.from('BT /F1 12 Tf 72 720 Td (Invoice ZSFL 26-27 0148 taxable amount 30940 supplier Northwind Components) Tj ET\n'));
+  const compressedPdf = Buffer.concat([
+    Buffer.from(`%PDF-1.4\n1 0 obj << /Length ${compressed.length} /Filter /FlateDecode >> stream\n`),
+    compressed,
+    Buffer.from('\nendstream\nendobj\n')
+  ]);
+  const compressedText = await readPdfText(compressedPdf);
+  assert.ok(compressedText.includes('30940'));
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   const image = await prepareDocument(png, 'scan.png');
   assert.strictEqual(image.kind, 'image');
