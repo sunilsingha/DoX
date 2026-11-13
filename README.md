@@ -32,7 +32,7 @@ Copy these fields into `default-env.json`:
 cp default-env.sample.json default-env.json
 ```
 
-`default-env.json` is gitignored. On Cloud Foundry the app reads the same fields from a service binding whose label contains `aicore`. Do not commit the client secret.
+`default-env.json` is gitignored. On Cloud Foundry the app reads the same fields from a service binding. See section 8. Do not commit the client secret.
 
 The instance creates a resource group named `default`. Leave `AICORE_RESOURCE_GROUP` as `default` unless you created another group. A model deployment belongs to one resource group.
 
@@ -119,6 +119,38 @@ The model is asked to return JSON shaped as `header` and `lineItems`, keyed by t
 - An empty cell means the model did not find that field on the document.
 
 Preview sample loads a fictional invoice (Northwind Components to Contoso Retail, `ZSFL/26-27/0148`) so the tables can be reviewed without SAP AI Core.
+
+## 8. Deploy to Cloud Foundry
+
+The app runs on the Cloud Foundry runtime in SAP BTP. `manifest.yml` names the app `invoice-extraction` and sets `NODE_ENV=production`. Credentials stay in service bindings. Deployment IDs stay in app environment variables, because a service key does not contain them.
+
+1. Install the [Cloud Foundry CLI](https://docs.cloudfoundry.org/cf-cli/install-go-cli.html) and log in to the subaccount API endpoint from the BTP cockpit:
+
+```bash
+cf login --sso
+cf target -o <org> -s <space>
+cf services
+```
+
+2. Push the app without starting it, then bind the instances whose names `cf services` printed. The AI Core instance label is `aicore`. The Document AI instance label is `document-information-extraction` (a trial instance uses `document-information-extraction-trial`). The app also accepts a user-provided service whose name contains `aicore` or `document`.
+
+```bash
+cf push --no-start
+cf bind-service invoice-extraction <ai-core-instance>
+cf bind-service invoice-extraction <document-ai-instance>
+```
+
+3. Set the deployment IDs from SAP AI Launchpad. Use the GPT chat deployment for `AICORE_DEPLOYMENT_ID` and the Gemini chat deployment for `AICORE_GEMINI_DEPLOYMENT_ID`. Leave the resource group as `default` unless the deployment was created in another AI Core resource group. The Launchpad workspace name is not the resource group.
+
+```bash
+cf set-env invoice-extraction AICORE_DEPLOYMENT_ID <gpt-deployment-id>
+cf set-env invoice-extraction AICORE_GEMINI_DEPLOYMENT_ID <gemini-deployment-id>
+cf start invoice-extraction
+```
+
+`cf app invoice-extraction` prints the route. Open that URL. The page reads the bindings from `VCAP_SERVICES` and the deployment IDs from the environment. Changing a deployment ID later is `cf set-env` followed by `cf restart invoice-extraction`. A new binding needs `cf restage invoice-extraction`.
+
+`default-env.json` is listed in `.cfignore`, so a local secrets file is not uploaded and cannot override the bindings. The invoice page does not use a database, so no HANA instance is required. The route is public: anyone who has the URL can call the bound AI Core and Document AI instances. Do not share it.
 
 ## What can be added next
 
