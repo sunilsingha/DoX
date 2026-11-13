@@ -19,9 +19,8 @@
   const schemaInput = document.getElementById('schema-file');
   const message = document.getElementById('message');
   const guide = document.getElementById('guide');
-
-  document.getElementById('open-guide').addEventListener('click', () => guide.showModal());
-  document.getElementById('close-guide').addEventListener('click', () => guide.close());
+  const closeGuide = document.getElementById('close-guide');
+  if (closeGuide) closeGuide.addEventListener('click', () => guide.close());
   document.getElementById('schema-name').addEventListener('change', () => useSelectedSchema());
   document.querySelectorAll('input[name="source"]').forEach(input => {
     input.addEventListener('change', syncSourceFields);
