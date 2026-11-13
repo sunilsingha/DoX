@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -80,7 +80,21 @@ const embedding = catalog.find(item => item.modelName.includes('embedding'));
 assert.ok(embedding && embedding.deployed && embedding.usable === false);
 assert.ok(!catalog.some(item => item.modelName.includes('realtime')));
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', '').deploymentId, 'dep-mini');
+assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', 'other-deployment'), null);
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o', ''), null);
+
+const merged = mergeConfiguredModels([
+  { modelName: 'gemini-2.5-flash', deployed: false, usable: false, deploymentId: '', executableId: 'gcp-vertexai' },
+  { modelName: 'gpt-4o-mini', deployed: true, usable: true, deploymentId: 'dep-mini', executableId: 'azure-openai' }
+], {
+  geminiDeploymentId: 'dep-gemini',
+  geminiModel: 'gemini-2.5-flash'
+});
+assert.strictEqual(merged[0].modelName, 'gemini-2.5-flash');
+assert.strictEqual(merged[0].deploymentId, 'dep-gemini');
+assert.strictEqual(merged[0].usable, true);
+assert.strictEqual(merged.filter(item => item.modelName === 'gemini-2.5-flash').length, 1);
+assert.ok(merged.some(item => item.deploymentId === 'dep-mini'));
 
 const geminiCatalog = joinModelCatalog({
   configurations: [{

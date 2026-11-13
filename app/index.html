@@ -92,13 +92,15 @@
                 </select>
               </label>
               <label class="for-aicore">Resource group<input id="resource-group" autocomplete="off" /></label>
-              <label class="for-aicore">Deployment ID<input id="deployment-id" autocomplete="off" placeholder="From the running model deployment" /></label>
+              <label class="for-aicore">GPT deployment ID<input id="deployment-id" autocomplete="off" placeholder="Running azure-openai deployment" /></label>
+              <label class="for-aicore">Gemini deployment ID<input id="gemini-deployment-id" autocomplete="off" placeholder="Running gcp-vertexai deployment" /></label>
+              <label class="for-aicore">Gemini model<input id="gemini-model" autocomplete="off" placeholder="gemini-2.5-flash" /></label>
               <label class="for-document">Document AI client<input id="dox-client" autocomplete="off" /></label>
               <label class="for-document span-2">Template name or id
                 <input id="template" autocomplete="off" placeholder="Needed when fields use manual setup" />
               </label>
             </div>
-            <p class="hint" id="source-hint">AI Core sends the schema fields to the deployed model. Resource group is usually <code>default</code>. Deployment ID is the running foundation-model deployment.</p>
+            <p class="hint" id="source-hint">GPT and Gemini each have their own deployment ID. Choose the model above. Resource group is usually <code>default</code>.</p>
             <div class="actions">
               <button type="button" class="btn" id="load-schema">Load schema export</button>
               <input id="schema-file" type="file" accept="application/json,.json" hidden />

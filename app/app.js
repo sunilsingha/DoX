@@ -6,6 +6,8 @@
     currency: 'INR',
     busy: false,
     configuredDeploymentId: '',
+    geminiDeploymentId: '',
+    geminiModel: 'gemini-2.5-flash',
     models: []
   };
 
@@ -27,6 +29,9 @@
   syncSourceFields();
   document.getElementById('model-name').addEventListener('change', applyModelChoice);
   document.getElementById('resource-group').addEventListener('change', () => loadModels());
+  document.getElementById('gemini-deployment-id').addEventListener('change', () => fillModelSelect(state.models, document.getElementById('model-name').value));
+  document.getElementById('gemini-model').addEventListener('change', () => fillModelSelect(state.models, document.getElementById('model-name').value));
+  document.getElementById('deployment-id').addEventListener('change', () => fillModelSelect(state.models, document.getElementById('model-name').value));
   document.getElementById('extract').addEventListener('click', () => extract('live'));
   document.getElementById('sample').addEventListener('click', () => extract('sample'));
   document.getElementById('probe').addEventListener('click', probe);
@@ -193,7 +198,7 @@
       hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. The Model menu chooses which running AI Core deployment to compare with Document AI.';
       extract.textContent = 'Extract with both';
     } else {
-      hint.innerHTML = 'AI Core sends the schema fields to the model selected above. Configured deployment uses the deployment ID in <code>default-env.json</code>.';
+      hint.innerHTML = 'GPT and Gemini each have their own deployment ID. Choose the model above. The two IDs are filled from <code>default-env.json</code>.';
       extract.textContent = 'Extract invoice';
     }
   }
@@ -212,35 +217,75 @@
   function selectedModel() {
     const select = document.getElementById('model-name');
     const option = select.selectedOptions && select.selectedOptions[0];
-    if (!option || !option.value) return { modelName: '', deploymentId: '' };
+    if (!option || option.value === 'gpt') {
+      return { modelName: '', deploymentId: document.getElementById('deployment-id').value.trim(), executableId: 'azure-openai' };
+    }
     return {
       modelName: option.dataset.modelName || '',
-      deploymentId: option.dataset.deploymentId || ''
+      deploymentId: option.dataset.deploymentId || '',
+      executableId: option.dataset.executableId || ''
     };
+  }
+
+  function localGemini() {
+    const deploymentId = document.getElementById('gemini-deployment-id').value.trim();
+    const modelName = document.getElementById('gemini-model').value.trim() || 'gemini-2.5-flash';
+    if (!deploymentId) return null;
+    const embedding = modelName.toLowerCase().includes('embed');
+    return {
+      modelName,
+      modelVersion: 'latest',
+      deploymentId,
+      executableId: 'gcp-vertexai',
+      deployed: true,
+      usable: !embedding,
+      reason: embedding ? `${modelName} is an embedding model. It cannot read an invoice.` : ''
+    };
+  }
+
+  function modelsForMenu(models) {
+    const list = (models || []).map(item => ({ ...item }));
+    const gemini = localGemini();
+    if (!gemini) return list;
+    const existing = list.find(item => item.deploymentId === gemini.deploymentId);
+    if (existing) {
+      existing.modelName = gemini.modelName;
+      existing.executableId = 'gcp-vertexai';
+      existing.deployed = true;
+      existing.usable = gemini.usable;
+      existing.reason = gemini.reason;
+      return list;
+    }
+    const suggestion = list.findIndex(item => !item.deployed && item.modelName.toLowerCase() === gemini.modelName.toLowerCase());
+    if (suggestion >= 0) list.splice(suggestion, 1);
+    return [gemini, ...list];
   }
 
   function applyModelChoice() {
     const choice = selectedModel();
-    const deployment = document.getElementById('deployment-id');
-    if (choice.deploymentId) deployment.value = choice.deploymentId;
-    else if (state.configuredDeploymentId) deployment.value = state.configuredDeploymentId;
+    if (choice.executableId === 'azure-openai' && !choice.modelName && state.configuredDeploymentId && !document.getElementById('deployment-id').value.trim()) {
+      document.getElementById('deployment-id').value = state.configuredDeploymentId;
+    }
   }
 
   function fillModelSelect(models, previous) {
     const select = document.getElementById('model-name');
     const current = previous != null ? previous : select.value;
+    const menu = modelsForMenu(models);
     select.replaceChildren();
     const fallback = document.createElement('option');
-    fallback.value = '';
-    fallback.textContent = 'Configured deployment';
+    const gptId = document.getElementById('deployment-id').value.trim();
+    fallback.value = 'gpt';
+    fallback.textContent = gptId ? `GPT · ${gptId}` : 'GPT deployment';
     select.appendChild(fallback);
-    models.forEach(model => {
+    menu.forEach(model => {
       const option = document.createElement('option');
       option.value = model.deployed ? model.deploymentId : `unavailable:${model.modelName}`;
       option.disabled = !model.deployed || model.usable === false;
       option.dataset.modelName = model.modelName;
       option.dataset.deploymentId = model.deploymentId || '';
-      const copies = models.filter(item => item.deployed && item.usable !== false && item.modelName === model.modelName).length;
+      option.dataset.executableId = model.executableId || '';
+      const copies = menu.filter(item => item.deployed && item.usable !== false && item.modelName === model.modelName).length;
       const version = model.modelVersion && model.modelVersion !== 'latest' ? ` · ${model.modelVersion}` : '';
       const suffix = copies > 1 && model.deploymentId ? ` · ${model.deploymentId.slice(0, 8)}` : '';
       const blocked = model.deployed && model.usable === false
@@ -263,16 +308,16 @@
       const response = await fetch(`/api/models?resourceGroup=${encodeURIComponent(group)}`);
       const body = await readJson(response);
       state.models = body.models || [];
-      fillModelSelect(state.models, previous);
-      const chatRunning = state.models.filter(model => model.deployed && model.usable !== false);
-      const blocked = state.models.filter(model => model.deployed && model.usable === false);
-      if (body.error) note.textContent = body.error;
-      else if (!chatRunning.length && blocked.length) {
+      fillModelSelect(state.models, previous === '' ? 'gpt' : previous);
+      const shown = modelsForMenu(state.models);
+      const chatRunning = shown.filter(model => model.deployed && model.usable !== false);
+      const blocked = shown.filter(model => model.deployed && model.usable === false);
+      if (chatRunning.length) note.textContent = 'GPT and Gemini keep separate deployment IDs. Pick one in this menu. A model marked embedding only cannot read an invoice.';
+      else if (body.error) note.textContent = body.error;
+      else if (blocked.length) {
         note.textContent = 'The running Gemini deployment is an embedding model, so it cannot read an invoice. Deploy the gcp-vertexai executable with modelName gemini-2.5-flash and modelVersion latest, then choose that model here.';
-      } else if (!chatRunning.length) {
-        note.textContent = 'No chat models are running in this resource group yet. Configured deployment uses the deployment ID in Request options.';
       } else {
-        note.textContent = 'GPT models use azure-openai. Gemini chat models, such as gemini-2.5-flash, use gcp-vertexai. A model marked embedding only cannot read an invoice.';
+        note.textContent = 'No chat models are running yet. Add the Gemini deployment ID under Request options, or deploy a chat model and refresh.';
       }
     } catch (error) {
       fillModelSelect([], '');
@@ -283,8 +328,16 @@
   function renderConnection(status) {
     document.getElementById('resource-group').value = status.resourceGroup || 'default';
     if (status.deploymentId) state.configuredDeploymentId = status.deploymentId;
+    if (status.geminiDeploymentId) state.geminiDeploymentId = status.geminiDeploymentId;
+    if (status.geminiModel) state.geminiModel = status.geminiModel;
     if (!document.getElementById('deployment-id').value) {
       document.getElementById('deployment-id').value = state.configuredDeploymentId;
+    }
+    if (!document.getElementById('gemini-deployment-id').value) {
+      document.getElementById('gemini-deployment-id').value = state.geminiDeploymentId;
+    }
+    if (!document.getElementById('gemini-model').value) {
+      document.getElementById('gemini-model').value = state.geminiModel || 'gemini-2.5-flash';
     }
     const documentStatus = status.documentAi || {};
     if (!document.getElementById('dox-client').value) {
@@ -471,6 +524,7 @@
     const choice = selectedModel();
     form.set('resourceGroup', document.getElementById('resource-group').value.trim());
     form.set('modelName', choice.modelName);
+    form.set('executableId', choice.executableId);
     form.set('deploymentId', choice.deploymentId || document.getElementById('deployment-id').value.trim());
     form.set('doxClient', document.getElementById('dox-client').value.trim());
     form.set('template', document.getElementById('template').value.trim());

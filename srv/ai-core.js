@@ -101,6 +101,8 @@ function loadConfig() {
     clientSecret: pick(file, 'AICORE_CLIENT_SECRET') || vcap.clientSecret,
     resourceGroup: pick(file, 'AICORE_RESOURCE_GROUP') || 'default',
     deploymentId: pick(file, 'AICORE_DEPLOYMENT_ID'),
+    geminiDeploymentId: pick(file, 'AICORE_GEMINI_DEPLOYMENT_ID'),
+    geminiModel: pick(file, 'AICORE_GEMINI_MODEL') || 'gemini-2.5-flash',
     apiVersion
   };
 }
@@ -124,7 +126,9 @@ function publicStatus() {
     tokenHost: hostOf(config.tokenUrl),
     apiHost: hostOf(config.apiUrl),
     resourceGroup: config.resourceGroup || 'default',
-    deploymentId: config.deploymentId || ''
+    deploymentId: config.deploymentId || '',
+    geminiDeploymentId: config.geminiDeploymentId || '',
+    geminiModel: config.geminiModel || 'gemini-2.5-flash'
   };
 }
 
@@ -545,12 +549,48 @@ function joinModelCatalog({ configurations, deployments, supportedNames }) {
   });
 }
 
+function configuredGemini(config) {
+  const deploymentId = String((config && config.geminiDeploymentId) || '').trim();
+  if (!deploymentId) return null;
+  const modelName = String((config && config.geminiModel) || 'gemini-2.5-flash').trim() || 'gemini-2.5-flash';
+  const use = modelUse(modelName);
+  return {
+    modelName,
+    modelVersion: 'latest',
+    deploymentId,
+    executableId: 'gcp-vertexai',
+    configurationName: 'AICORE_GEMINI_DEPLOYMENT_ID',
+    deployed: true,
+    usable: use.usable,
+    reason: use.reason
+  };
+}
+
+function mergeConfiguredModels(models, config) {
+  const list = (models || []).map(item => ({ ...item }));
+  const gemini = configuredGemini(config);
+  if (!gemini) return list;
+  const existing = list.find(item => item.deploymentId === gemini.deploymentId);
+  if (existing) {
+    existing.modelName = gemini.modelName || existing.modelName;
+    existing.executableId = existing.executableId || 'gcp-vertexai';
+    existing.deployed = true;
+    existing.usable = gemini.usable;
+    existing.reason = gemini.reason;
+    return list;
+  }
+  const suggestion = list.findIndex(item => !item.deployed && item.modelName.toLowerCase() === gemini.modelName.toLowerCase());
+  if (suggestion >= 0) list.splice(suggestion, 1);
+  return [gemini, ...list];
+}
+
 function pickDeployment(models, modelName, deploymentId) {
   const wanted = String(modelName || '').trim().toLowerCase();
   if (!wanted) return null;
-  const matches = (models || []).filter(item => item.deployed && item.modelName.toLowerCase() === wanted);
+  const matches = (models || []).filter(item => item.deployed && item.usable !== false && item.modelName.toLowerCase() === wanted);
   if (!matches.length) return null;
-  return matches.find(item => item.deploymentId && item.deploymentId === deploymentId) || matches[0];
+  if (deploymentId) return matches.find(item => item.deploymentId === deploymentId) || null;
+  return matches[0];
 }
 
 function geminiParts(content) {
@@ -721,11 +761,12 @@ async function loadCatalog(config, token, group) {
 async function listChatModels({ resourceGroup } = {}) {
   const config = loadConfig();
   const group = String(resourceGroup || config.resourceGroup || 'default').trim() || 'default';
+  const saved = mergeConfiguredModels([], config);
   const missing = missingKeys(config).filter(key => key !== 'AICORE_DEPLOYMENT_ID');
   if (missing.length) {
     return {
       resourceGroup: group,
-      models: [],
+      models: saved,
       error: `Add ${missing.join(', ')} to default-env.json to list deployed models.`
     };
   }
@@ -733,13 +774,13 @@ async function listChatModels({ resourceGroup } = {}) {
     const token = await getToken(config);
     return {
       resourceGroup: group,
-      models: await loadCatalog(config, token, group),
+      models: mergeConfiguredModels(await loadCatalog(config, token, group), config),
       error: ''
     };
   } catch (error) {
     return {
       resourceGroup: group,
-      models: [],
+      models: saved,
       error: error.message || 'Could not list foundation-model deployments.'
     };
   }
@@ -749,30 +790,50 @@ function deploymentExecutable(requested) {
   return providerFor(requested) === 'gemini' ? 'gcp-vertexai' : 'azure-openai';
 }
 
-async function resolveChatDeployment(config, token, group, { modelName, deploymentId }) {
+function directDeployment(requested, explicit, executableId) {
+  const use = modelUse(requested);
+  if (requested && !use.usable) throw new AiCoreError(use.reason, 400);
+  return {
+    deploymentId: explicit,
+    modelName: requested,
+    modelVersion: 'latest',
+    executableId: executableId || (requested ? deploymentExecutable(requested) : ''),
+    usable: true,
+    reason: ''
+  };
+}
+
+async function resolveChatDeployment(config, token, group, { modelName, deploymentId, executableId }) {
   const requested = String(modelName || '').trim();
   const explicit = String(deploymentId || config.deploymentId || '').trim();
+  const executable = String(executableId || '').trim();
   if (!requested && !explicit) {
     throw new AiCoreError('Add AICORE_DEPLOYMENT_ID to default-env.json, or choose a deployed model.', 400);
   }
+  if (!requested && explicit && explicit === String(config.geminiDeploymentId || '').trim()) {
+    const gemini = configuredGemini(config);
+    if (gemini && gemini.usable === false) throw new AiCoreError(gemini.reason, 400);
+    if (gemini) return gemini;
+  }
   let models = [];
   try {
-    models = await loadCatalog(config, token, group);
+    models = mergeConfiguredModels(await loadCatalog(config, token, group), config);
   } catch (error) {
+    if (requested && explicit) return directDeployment(requested, explicit, executable);
     if (requested) throw error;
-    return { deploymentId: explicit, modelName: '', modelVersion: '', executableId: '', usable: true, reason: '' };
+    return directDeployment('', explicit, executable);
   }
   if (!requested) {
     const found = models.find(item => item.deployed && item.deploymentId === explicit);
     if (found && found.usable === false) throw new AiCoreError(found.reason, 400);
-    return found || { deploymentId: explicit, modelName: '', modelVersion: '', executableId: '', usable: true, reason: '' };
+    return found || directDeployment('', explicit, executable);
   }
   const match = pickDeployment(models, requested, explicit);
   if (match && match.usable === false) throw new AiCoreError(match.reason, 400);
+  if (!match && explicit) return directDeployment(requested, explicit, executable);
   if (!match) {
-    const executable = deploymentExecutable(requested);
     throw new AiCoreError(
-      `${requested} has no RUNNING deployment in resource group ${group}. Create a ${executable} configuration with modelName ${requested} and modelVersion latest, deploy it, and wait until the status is RUNNING.`,
+      `${requested} has no RUNNING deployment in resource group ${group}. Create a ${deploymentExecutable(requested)} configuration with modelName ${requested} and modelVersion latest, deploy it, and wait until the status is RUNNING.`,
       400
     );
   }
@@ -820,7 +881,7 @@ function failedChat(response) {
   );
 }
 
-async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId, modelName }) {
+async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId, modelName, executableId }) {
   const config = loadConfig();
   const requestedModel = String(modelName || '').trim();
   const missing = missingKeys({
@@ -833,7 +894,7 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   const prepared = await prepareDocument(buffer, filename);
   const token = await getToken(config);
   const group = String(resourceGroup || config.resourceGroup || 'default').trim() || 'default';
-  const resolved = await resolveChatDeployment(config, token, group, { modelName: requestedModel, deploymentId });
+  const resolved = await resolveChatDeployment(config, token, group, { modelName: requestedModel, deploymentId, executableId });
   const deployment = resolved.deploymentId;
   const model = resolved.modelName;
   let response = await completeChat(config, token, group, deployment, userContent(schema, prepared), resolved);
@@ -876,6 +937,7 @@ module.exports = {
   modelUse,
   supportedModelNames,
   joinModelCatalog,
+  mergeConfiguredModels,
   pickDeployment,
   chatPayload,
   geminiPayload,

@@ -934,7 +934,8 @@ async function extractWithAiCore(file, schema, body) {
     schema,
     resourceGroup: body.resourceGroup,
     deploymentId: body.deploymentId,
-    modelName: body.modelName
+    modelName: body.modelName,
+    executableId: body.executableId
   });
   return {
     ok: true,

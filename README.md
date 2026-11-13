@@ -58,7 +58,7 @@ Deploy the model itself. An orchestration deployment is a different endpoint. Th
 
 The executable lists every model that provider can run, including `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`. A deployment still serves only the `modelName` saved on its configuration. To change models from the page, create one configuration and one RUNNING deployment per model. The Model menu reads those deployments and sends the invoice to the one you pick. Configured deployment keeps using `AICORE_DEPLOYMENT_ID`. Embedding and realtime models are not offered for extraction. A model shown as not deployed needs its own configuration before it can be selected.
 
-Gemini chat models use the same menu. Create a configuration with executable `gcp-vertexai`, `modelName` `gemini-2.5-flash` (or `gemini-2.5-pro`), and `modelVersion` `latest`, then deploy it. The page calls that deployment's `generateContent` endpoint. A deployment whose model is `gemini-embedding` appears as embedding only. It creates vectors and cannot read an invoice.
+Gemini chat models use the same menu and a separate deployment ID. Keep the GPT deployment in `AICORE_DEPLOYMENT_ID`. Put the Gemini deployment in `AICORE_GEMINI_DEPLOYMENT_ID`, and set `AICORE_GEMINI_MODEL` to the deployed model name, usually `gemini-2.5-flash`. The Model menu shows both IDs. Picking Gemini calls that deployment's `generateContent` endpoint. A deployment whose model is `gemini-embedding` appears as embedding only. It creates vectors and cannot read an invoice.
 
 ## 4. Schemas
 
