@@ -1,5 +1,6 @@
 (function () {
   const state = {
+    documentJobId: '',
     schema: null,
     header: [],
     lineItems: [],
@@ -32,6 +33,7 @@
   document.getElementById('gemini-model').addEventListener('change', () => fillModelSelect(state.models, document.getElementById('model-name').value));
   document.getElementById('deployment-id').addEventListener('change', () => fillModelSelect(state.models, document.getElementById('model-name').value));
   document.getElementById('extract').addEventListener('click', () => extract('live'));
+  document.getElementById('check-document-job').addEventListener('click', checkDocumentJob);
   document.getElementById('sample').addEventListener('click', () => extract('sample'));
   document.getElementById('probe').addEventListener('click', probe);
   document.getElementById('load-schema').addEventListener('click', () => schemaInput.click());
@@ -590,7 +592,13 @@
       : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.${model}`;
     const errors = document.getElementById('compare-errors');
     errors.replaceChildren();
-    if (result.documentAi && result.documentAi.ok === false) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
+    const documentPending = Boolean(result.documentAi && result.documentAi.pending && result.documentAi.jobId);
+    state.documentJobId = documentPending ? result.documentAi.jobId : '';
+    const checkJob = document.getElementById('check-document-job');
+    checkJob.hidden = !documentPending;
+    checkJob.disabled = false;
+    checkJob.textContent = 'Check Document AI status';
+    if (result.documentAi && result.documentAi.ok === false && !documentPending) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
     if (result.aiCore && result.aiCore.ok === false) errors.appendChild(errorStrip(`AI Core: ${result.aiCore.error}`));
     const tbody = document.querySelector('#compare-header tbody');
     tbody.replaceChildren();
@@ -626,6 +634,11 @@
       showMessage('information', 'Sample invoice only. Neither service was called. The comparison uses the same sample on both sides.');
       return;
     }
+    if (documentPending) {
+      const detail = result.documentAi.error || `Document AI job ${result.documentAi.jobId} is still ${result.documentAi.status || 'PENDING'}.`;
+      showMessage('information', `${detail} AI Core is already in this comparison. Check Document AI status to load it here.`);
+      return;
+    }
     if ((result.documentAi && result.documentAi.ok === false) || (result.aiCore && result.aiCore.ok === false)) {
       showMessage('critical', 'One extraction did not finish. The comparison shows the values that did come back.');
       return;
@@ -635,6 +648,34 @@
       return;
     }
     showMessage('positive', 'Document AI and AI Core returned the same values.');
+  }
+
+  async function checkDocumentJob() {
+    const jobId = state.documentJobId;
+    if (!jobId || state.busy) return;
+    const button = document.getElementById('check-document-job');
+    setBusy(true);
+    button.disabled = true;
+    button.textContent = 'Checking Document AI…';
+    showMessage('information', `Checking Document AI job ${jobId}.`);
+    try {
+      const response = await fetch(`/api/document-jobs/${encodeURIComponent(jobId)}`);
+      const body = await readJson(response);
+      if (body.pending) {
+        showMessage('information', `${body.message || `Document AI job ${jobId} is still ${body.status}.`} AI Core stays in this comparison.`);
+        return;
+      }
+      renderComparison(body);
+    } catch (error) {
+      showMessage('negative', error.message);
+    } finally {
+      setBusy(false);
+      if (state.documentJobId) {
+        button.hidden = false;
+        button.disabled = false;
+        button.textContent = 'Check Document AI status';
+      }
+    }
   }
 
   function errorStrip(text) {

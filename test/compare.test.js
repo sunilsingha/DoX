@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { compareExtractions, sourceFrom } = require('../srv/document-ai');
+const { compareExtractions, comparisonFromJob, jobPhase, sourceFrom } = require('../srv/document-ai');
 
 assert.strictEqual(sourceFrom(''), 'aicore');
 assert.strictEqual(sourceFrom('document-ai'), 'document');
@@ -42,5 +42,42 @@ assert.strictEqual(compared.summary.headerDiffer, 1);
 assert.strictEqual(compared.summary.headerMatch, 2);
 assert.strictEqual(compared.summary.documentLines, 1);
 assert.strictEqual(compared.summary.coreLines, 2);
+
+assert.strictEqual(jobPhase('PENDING'), 'pending');
+assert.strictEqual(jobPhase('done'), 'done');
+assert.strictEqual(jobPhase('FAILED'), 'failed');
+
+const schema = {
+  name: 'Demo',
+  version: '1',
+  documentType: 'custom',
+  description: '',
+  headerFields: [{ name: 'invoiceNumber', label: 'Invoice Number', type: 'string' }],
+  lineItemFields: []
+};
+const saved = {
+  jobId: 'job-12345678',
+  schema,
+  file: { originalname: 'invoice.pdf', size: 10 },
+  coreSide: {
+    ok: true,
+    status: 'DONE',
+    modelName: 'gpt-4o-mini',
+    header: [{ name: 'invoiceNumber', label: 'Invoice Number', value: '174221', confidence: 1 }],
+    lineItems: []
+  }
+};
+const waiting = comparisonFromJob(saved, { status: 'PENDING' });
+assert.strictEqual(waiting.pending, true);
+assert.strictEqual(waiting.status, 'PENDING');
+const ready = comparisonFromJob(saved, {
+  status: 'DONE',
+  extraction: { headerFields: [{ name: 'invoiceNumber', value: '174221', confidence: 0.91 }], lineItems: [] }
+});
+assert.strictEqual(ready.mode, 'compare');
+assert.strictEqual(ready.documentAi.pending, false);
+assert.strictEqual(ready.documentAi.status, 'DONE');
+assert.strictEqual(ready.comparison.header[0].state, 'match');
+assert.strictEqual(ready.comparison.header[0].aiCore.value, '174221');
 
 console.log('compare tests passed');
