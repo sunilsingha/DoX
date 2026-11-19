@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText, readUsage, combineUsage } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -160,6 +160,41 @@ assert.strictEqual(geminiBody.contents[0].parts[1].inlineData.mimeType, 'applica
 assert.strictEqual(geminiBody.generationConfig.responseMimeType, 'application/json');
 const geminiText = messageText({ candidates: [{ content: { parts: [{ text: '{"header":{}}' }] } }] });
 assert.ok(geminiText.includes('header'));
+const openaiUsage = readUsage({
+  model: 'gpt-4o-mini-2024-07-18',
+  usage: {
+    prompt_tokens: 2500,
+    completion_tokens: 1140,
+    total_tokens: 3640,
+    prompt_tokens_details: { cached_tokens: 120 },
+    completion_tokens_details: { reasoning_tokens: 0 }
+  }
+});
+assert.strictEqual(openaiUsage.promptTokens, 2500);
+assert.strictEqual(openaiUsage.completionTokens, 1140);
+assert.strictEqual(openaiUsage.inputTokens, 2500);
+assert.strictEqual(openaiUsage.outputTokens, 1140);
+assert.strictEqual(openaiUsage.totalTokens, 3640);
+assert.strictEqual(openaiUsage.cachedTokens, 120);
+const geminiUsage = readUsage({
+  modelVersion: 'gemini-2.5-flash',
+  usageMetadata: {
+    promptTokenCount: 2100,
+    candidatesTokenCount: 980,
+    totalTokenCount: 3080,
+    thoughtsTokenCount: 0,
+    cachedContentTokenCount: 0,
+    promptTokensDetails: [{ modality: 'TEXT', tokenCount: 1030 }, { modality: 'IMAGE', tokenCount: 1070 }]
+  }
+});
+assert.strictEqual(geminiUsage.model, 'gemini-2.5-flash');
+assert.strictEqual(geminiUsage.promptDetails[1].modality, 'IMAGE');
+assert.strictEqual(geminiUsage.promptDetails[1].tokens, 1070);
+const combined = combineUsage([openaiUsage, geminiUsage], { modelName: 'gemini-2.5-flash', deploymentId: 'dep-running' });
+assert.strictEqual(combined.calls, 2);
+assert.strictEqual(combined.totalTokens, 3640 + 3080);
+assert.strictEqual(combined.reportedModel, 'gemini-2.5-flash');
+assert.strictEqual(combined.deploymentId, 'dep-running');
 
 const miniPayload = chatPayload('gpt-4o-mini', 'extract');
 assert.strictEqual(miniPayload.temperature, 0);

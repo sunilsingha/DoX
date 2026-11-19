@@ -1011,7 +1011,8 @@ async function extractWithAiCore(file, schema, body) {
     lineItems: live.lineItems,
     deploymentId: live.deploymentId,
     resourceGroup: live.resourceGroup,
-    modelName: live.modelName || ''
+    modelName: live.modelName || '',
+    usage: live.usage || null
   };
 }
 
@@ -1030,7 +1031,8 @@ function singleResponse(source, file, schema, live) {
     header: live.header,
     lineItems: live.lineItems,
     modelName: live.modelName || '',
-    deploymentId: live.deploymentId || ''
+    deploymentId: live.deploymentId || '',
+    usage: live.usage || null
   };
 }
 
@@ -1054,7 +1056,10 @@ function compareResponse(schema, file, documentSide, coreSide, sample) {
       error: coreSide.error || '',
       detail: coreSide.detail || '',
       status: coreSide.status || '',
-      modelName: coreSide.modelName || ''
+      modelName: coreSide.modelName || '',
+      deploymentId: coreSide.deploymentId || '',
+      resourceGroup: coreSide.resourceGroup || '',
+      usage: coreSide.usage || null
     },
     comparison: compareExtractions(documentSide, coreSide)
   };

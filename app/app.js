@@ -561,6 +561,7 @@
     }
     document.getElementById('single-results').hidden = false;
     document.getElementById('compare').hidden = true;
+    renderUsage(result.source === 'document' || result.mode === 'sample' ? null : result.usage);
     state.header = result.header || [];
     state.lineItems = result.lineItems || [];
     const currency = state.header.find(field => field.name === 'currencyCode');
@@ -587,6 +588,7 @@
     document.getElementById('single-results').hidden = true;
     const panel = document.getElementById('compare');
     panel.hidden = false;
+    renderUsage(result.sample ? null : result.aiCore && result.aiCore.usage);
     const comparison = result.comparison || { header: [], lineItems: [], summary: {} };
     const summary = comparison.summary || {};
     const model = result.aiCore && result.aiCore.modelName ? ` AI Core model: ${result.aiCore.modelName}.` : '';
@@ -770,6 +772,55 @@
       setBusy(false);
       schemaInput.value = '';
     }
+  }
+
+  function renderUsage(usage) {
+    const panel = document.getElementById('usage');
+    const facts = document.getElementById('usage-facts');
+    const note = document.getElementById('usage-note');
+    if (!usage || (usage.totalTokens == null && usage.promptTokens == null && usage.completionTokens == null)) {
+      panel.hidden = true;
+      facts.replaceChildren();
+      return;
+    }
+    const items = [
+      ['Model', usage.reportedModel || usage.model],
+      ['Selected model', usage.model && usage.model !== usage.reportedModel ? usage.model : ''],
+      ['Deployment', usage.deploymentId],
+      ['Resource group', usage.resourceGroup],
+      ['Executable', usage.executableId],
+      ['Input tokens', formatCount(usage.inputTokens)],
+      ['Output tokens', formatCount(usage.outputTokens)],
+      ['Prompt tokens', formatCount(usage.promptTokens)],
+      ['Completion tokens', formatCount(usage.completionTokens)],
+      ['Total tokens', formatCount(usage.totalTokens)]
+    ];
+    if (usage.cachedTokens) items.push(['Cached input tokens', formatCount(usage.cachedTokens)]);
+    if (usage.reasoningTokens) items.push(['Reasoning tokens', formatCount(usage.reasoningTokens)]);
+    (usage.promptDetails || []).forEach(item => items.push([`Prompt ${String(item.modality).toLowerCase()}`, formatCount(item.tokens)]));
+    (usage.completionDetails || []).forEach(item => items.push([`Completion ${String(item.modality).toLowerCase()}`, formatCount(item.tokens)]));
+    if (usage.calls > 1) items.push(['AI Core calls', String(usage.calls)]);
+    facts.replaceChildren(...items.filter(([, value]) => value !== '' && value != null).map(([label, value]) => usageFact(label, value)));
+    note.textContent = usage.calls > 1
+      ? 'Counts are the sum of the AI Core calls for this extraction. Prompt tokens are the input. Completion tokens are the output.'
+      : 'Prompt tokens are the input. Completion tokens are the output. The counts come from the model response.';
+    panel.hidden = false;
+  }
+
+  function usageFact(label, value) {
+    const card = document.createElement('article');
+    card.className = 'facet';
+    const caption = document.createElement('span');
+    caption.textContent = label;
+    const strong = document.createElement('strong');
+    strong.textContent = value;
+    card.append(caption, strong);
+    return card;
+  }
+
+  function formatCount(value) {
+    if (value == null || value === '') return '';
+    return new Intl.NumberFormat('en-IN').format(value);
   }
 
   function renderFacets() {

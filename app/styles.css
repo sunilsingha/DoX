@@ -449,6 +449,9 @@ input:focus, select:focus, button:focus-visible, .dropzone:focus-visible {
   margin-top: 1rem;
 }
 
+.usage-card { margin-bottom: 1rem; }
+.usage-card .facets { margin-top: 0; }
+
 .facet {
   background: #fff;
   border: 1px solid var(--sapBorderColor);

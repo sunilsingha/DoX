@@ -363,6 +363,97 @@ function userContent(schema, prepared) {
   return `${prompt}\n\nDOCUMENT TEXT:\n${prepared.text}`;
 }
 
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function readUsage(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const gemini = payload.usageMetadata || payload.usage_metadata;
+  if (gemini && typeof gemini === 'object') {
+    const prompt = finiteNumber(gemini.promptTokenCount);
+    const completion = finiteNumber(gemini.candidatesTokenCount);
+    const thoughts = finiteNumber(gemini.thoughtsTokenCount);
+    const total = finiteNumber(gemini.totalTokenCount);
+    return {
+      model: payload.modelVersion || payload.model || '',
+      inputTokens: prompt,
+      outputTokens: completion,
+      promptTokens: prompt,
+      completionTokens: completion,
+      totalTokens: total != null ? total : [prompt, completion, thoughts].reduce((sum, value) => sum + (value || 0), 0),
+      cachedTokens: finiteNumber(gemini.cachedContentTokenCount),
+      reasoningTokens: thoughts,
+      promptDetails: tokenDetails(gemini.promptTokensDetails),
+      completionDetails: tokenDetails(gemini.candidatesTokensDetails)
+    };
+  }
+  const openai = payload.usage;
+  if (!openai || typeof openai !== 'object') return null;
+  const prompt = finiteNumber(openai.prompt_tokens);
+  const completion = finiteNumber(openai.completion_tokens);
+  const total = finiteNumber(openai.total_tokens);
+  const promptDetails = openai.prompt_tokens_details || {};
+  const completionDetails = openai.completion_tokens_details || {};
+  return {
+    model: payload.model || '',
+    inputTokens: prompt,
+    outputTokens: completion,
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: total != null ? total : (prompt || 0) + (completion || 0),
+    cachedTokens: finiteNumber(promptDetails.cached_tokens),
+    reasoningTokens: finiteNumber(completionDetails.reasoning_tokens),
+    promptDetails: [],
+    completionDetails: []
+  };
+}
+
+function tokenDetails(details) {
+  if (!Array.isArray(details)) return [];
+  return details.map(item => ({
+    modality: String((item && (item.modality || item.type)) || 'text'),
+    tokens: finiteNumber(item && (item.tokenCount || item.tokens))
+  })).filter(item => item.tokens != null);
+}
+
+function combineUsage(parts, context) {
+  const rows = (parts || []).filter(Boolean);
+  if (!rows.length) return null;
+  const sum = key => {
+    const values = rows.map(row => row[key]).filter(value => value != null);
+    if (!values.length) return null;
+    return values.reduce((total, value) => total + value, 0);
+  };
+  const mergeDetails = key => {
+    const totals = new Map();
+    rows.forEach(row => (row[key] || []).forEach(item => {
+      totals.set(item.modality, (totals.get(item.modality) || 0) + item.tokens);
+    }));
+    return [...totals.entries()].map(([modality, tokens]) => ({ modality, tokens }));
+  };
+  const last = [...rows].reverse().find(row => row.model) || rows[rows.length - 1];
+  const extra = context || {};
+  return {
+    model: extra.modelName || last.model || '',
+    reportedModel: last.model || extra.modelName || '',
+    deploymentId: extra.deploymentId || '',
+    resourceGroup: extra.resourceGroup || '',
+    executableId: extra.executableId || '',
+    inputTokens: sum('inputTokens'),
+    outputTokens: sum('outputTokens'),
+    promptTokens: sum('promptTokens'),
+    completionTokens: sum('completionTokens'),
+    totalTokens: sum('totalTokens'),
+    cachedTokens: sum('cachedTokens'),
+    reasoningTokens: sum('reasoningTokens'),
+    promptDetails: mergeDetails('promptDetails'),
+    completionDetails: mergeDetails('completionDetails'),
+    calls: rows.length
+  };
+}
+
 function messageText(payload) {
   const geminiParts = payload && payload.candidates && payload.candidates[0] && payload.candidates[0].content && payload.candidates[0].content.parts;
   if (Array.isArray(geminiParts)) return geminiParts.map(part => (part && part.text) || '').join('\n');
@@ -966,7 +1057,9 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   const deployment = resolved.deploymentId;
   const model = resolved.modelName;
   const inferenceGroup = resolved.resourceGroup || group;
+  const responses = [];
   let response = await completeChat(config, token, inferenceGroup, deployment, userContent(schema, prepared), resolved);
+  responses.push(response);
   if (prepared.kind === 'pdf' && [400, 415, 422].includes(response.status)) {
     const text = await readPdfText(buffer);
     if (text.replace(/\s/g, '').length >= 40) {
@@ -974,6 +1067,7 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
         kind: 'text',
         text: text.slice(0, 60000)
       }), resolved);
+      responses.push(response);
     }
   }
   if (response.status !== 200) failedChat(response);
@@ -983,7 +1077,13 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
     ...merged,
     deploymentId: deployment,
     resourceGroup: inferenceGroup,
-    modelName: model
+    modelName: model,
+    usage: combineUsage(responses.map(item => readUsage(item && item.data)), {
+      modelName: model,
+      deploymentId: deployment,
+      resourceGroup: inferenceGroup,
+      executableId: resolved.executableId || ''
+    })
   };
 }
 
@@ -1014,5 +1114,7 @@ module.exports = {
   chatPayload,
   geminiPayload,
   messageText,
+  readUsage,
+  combineUsage,
   listChatModels
 };
