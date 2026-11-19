@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -94,17 +94,40 @@ assert.strictEqual(pickDeployment(catalog, 'gpt-4o-mini', 'other-deployment'), n
 assert.strictEqual(pickDeployment(catalog, 'gpt-4o', ''), null);
 
 const merged = mergeConfiguredModels([
-  { modelName: 'gemini-2.5-flash', deployed: false, usable: false, deploymentId: '', executableId: 'gcp-vertexai' },
+  { modelName: 'gemini-2.5-flash', deployed: true, usable: true, deploymentId: 'dep-running', executableId: 'gcp-vertexai' },
   { modelName: 'gpt-4o-mini', deployed: true, usable: true, deploymentId: 'dep-mini', executableId: 'azure-openai' }
 ], {
+  geminiDeploymentId: 'dep-stale',
+  geminiModel: 'gemini-2.5-flash'
+});
+assert.strictEqual(merged.find(item => item.modelName === 'gemini-2.5-flash').deploymentId, 'dep-running');
+assert.ok(!merged.some(item => item.deploymentId === 'dep-stale'));
+assert.ok(merged.some(item => item.deploymentId === 'dep-mini'));
+const savedGemini = mergeConfiguredModels([], {
   geminiDeploymentId: 'dep-gemini',
   geminiModel: 'gemini-2.5-flash'
 });
-assert.strictEqual(merged[0].modelName, 'gemini-2.5-flash');
-assert.strictEqual(merged[0].deploymentId, 'dep-gemini');
-assert.strictEqual(merged[0].usable, true);
-assert.strictEqual(merged.filter(item => item.modelName === 'gemini-2.5-flash').length, 1);
-assert.ok(merged.some(item => item.deploymentId === 'dep-mini'));
+assert.strictEqual(savedGemini[0].deploymentId, 'dep-gemini');
+const chosen = chooseCatalog('default', [
+  { resourceGroup: 'default', deployments: [{ id: 'dep-other', status: 'RUNNING' }] },
+  { resourceGroup: 'invoices', deployments: [{ id: 'dep-gemini', status: 'RUNNING' }, { id: 'dep-mini', status: 'RUNNING' }] }
+], ['dep-mini', 'dep-gemini']);
+assert.strictEqual(chosen.resourceGroup, 'invoices');
+const named = includeConfiguredDeployments([], [
+  { id: 'dep-gemini', status: 'RUNNING', executableId: 'gcp-vertexai', details: { scaling: { backendDetails: { model: { name: 'gemini-2.5-flash', version: 'latest' } } } } },
+  { id: 'dep-mini', status: 'RUNNING', details: { resources: { backendDetails: { model: { name: 'gpt-4o-mini', version: 'latest' } } } } }
+], { deploymentId: 'dep-mini', geminiDeploymentId: 'dep-gemini', geminiModel: 'gemini-2.5-flash' });
+assert.strictEqual(named.find(item => item.deploymentId === 'dep-gemini').modelName, 'gemini-2.5-flash');
+assert.strictEqual(named.find(item => item.deploymentId === 'dep-gemini').executableId, 'gcp-vertexai');
+assert.strictEqual(named.find(item => item.deploymentId === 'dep-mini').modelName, 'gpt-4o-mini');
+assert.ok(!named.some(item => item.deploymentId === 'dep-stale'));
+const resolvedModel = resolveChatDeployment({ deploymentId: 'dep-mini', geminiDeploymentId: 'dep-stale' }, null, 'default', {
+  modelName: 'gemini-2.5-flash',
+  deploymentId: 'dep-stale',
+  executableId: 'gcp-vertexai'
+}, [
+  { modelName: 'gemini-2.5-flash', deployed: true, usable: true, deploymentId: 'dep-running', executableId: 'gcp-vertexai' }
+]);
 
 const geminiCatalog = joinModelCatalog({
   configurations: [{
@@ -191,6 +214,9 @@ function textPdf(text) {
 }
 
 prepareDocument(textPdf('Invoice ZSFL 26-27 0148 taxable amount 30940 supplier Northwind Components'), 'invoice.pdf').then(async pdf => {
+  const resolved = await resolvedModel;
+  assert.strictEqual(resolved.deploymentId, 'dep-running');
+  assert.strictEqual(resolved.resourceGroup, 'default');
   assert.strictEqual(pdf.kind, 'pdf');
   const content = userContent(schema, pdf);
   assert.strictEqual(content[1].type, 'file');

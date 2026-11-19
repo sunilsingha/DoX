@@ -256,13 +256,14 @@
     const gemini = localGemini();
     if (gemini && canExtract(gemini.modelName)) {
       const existing = list.find(item => item.deploymentId === gemini.deploymentId);
+      const runningSameName = list.find(item => item.deployed && String(item.modelName || '').toLowerCase() === gemini.modelName.toLowerCase());
       if (existing) {
-        existing.modelName = gemini.modelName;
-        existing.executableId = 'gcp-vertexai';
+        if (!existing.modelName) existing.modelName = gemini.modelName;
+        existing.executableId = existing.executableId || 'gcp-vertexai';
         existing.deployed = true;
         existing.usable = true;
         existing.reason = '';
-      } else {
+      } else if (!runningSameName && !list.length) {
         list.unshift(gemini);
       }
     }
@@ -315,6 +316,7 @@
       const response = await fetch(`/api/models?resourceGroup=${encodeURIComponent(group)}`);
       const body = await readJson(response);
       state.models = body.models || [];
+      if (body.resourceGroup) document.getElementById('resource-group').value = body.resourceGroup;
       fillModelSelect(state.models, previous === '' ? 'gpt' : previous);
       const shown = modelsForMenu(state.models);
       if (shown.length || document.getElementById('deployment-id').value.trim()) {
@@ -527,7 +529,8 @@
     form.set('resourceGroup', document.getElementById('resource-group').value.trim());
     form.set('modelName', choice.modelName);
     form.set('executableId', choice.executableId);
-    form.set('deploymentId', choice.deploymentId || document.getElementById('deployment-id').value.trim());
+    const geminiChoice = choice.executableId === 'gcp-vertexai' || String(choice.modelName || '').toLowerCase().startsWith('gemini');
+    form.set('deploymentId', choice.deploymentId || (geminiChoice ? document.getElementById('gemini-deployment-id').value.trim() : document.getElementById('deployment-id').value.trim()));
     form.set('doxClient', document.getElementById('dox-client').value.trim());
     form.set('template', document.getElementById('template').value.trim());
     if (file) form.set('file', file);
