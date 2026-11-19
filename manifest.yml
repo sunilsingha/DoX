@@ -1,0 +1,18 @@
+---
+applications:
+  - name: invoice-extraction
+    memory: 512M
+    disk_quota: 1536M
+    instances: 1
+    random-route: true
+    buildpacks:
+      - nodejs_buildpack
+    command: npm start
+    health-check-type: port
+    timeout: 180
+    env:
+      NODE_ENV: production
+      AICORE_RESOURCE_GROUP: default
+      AICORE_API_VERSION: "2023-05-15"
+      AICORE_GEMINI_MODEL: gemini-2.5-flash
+      DOX_CLIENT: default

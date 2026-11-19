@@ -28,6 +28,8 @@ class DocumentAiError extends Error {
   }
 }
 
+const openComparisons = new Map();
+
 function projectRoot() {
   try {
     const cds = require('@sap/cds');
@@ -718,37 +720,99 @@ async function extractLive({ buffer, filename, mediaType, options }) {
   const started = Date.now();
   let lastStatus = 'PENDING';
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    let resultResponse;
-    try {
-      resultResponse = await axios.get(`${jobsUrl}/${jobId}`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-        params: { extractedValues: true },
-        timeout: 20000,
-        validateStatus: () => true
-      });
-    } catch (error) {
-      throw new DocumentAiError(`Could not read job ${jobId}. ${error.message}`, 502);
-    }
-    if (resultResponse.status !== 200) {
-      throw new DocumentAiError(
-        `Could not read job ${jobId} (${resultResponse.status}).`,
-        502,
-        safeDetail(resultResponse.data)
-      );
-    }
-    lastStatus = String(resultResponse.data.status || '').toUpperCase();
-    if (lastStatus === 'DONE' || lastStatus === 'CONFIRMED') {
-      return { payload: resultResponse.data, jobId, status: lastStatus };
-    }
-    if (lastStatus === 'FAILED') {
-      throw new DocumentAiError(`Document AI failed job ${jobId}.`, 502, safeDetail(resultResponse.data));
+    const payload = await fetchJob(config, token, jobId);
+    lastStatus = String(payload.status || '').toUpperCase();
+    if (jobPhase(lastStatus) === 'done') return { payload, jobId, status: lastStatus };
+    if (jobPhase(lastStatus) === 'failed') {
+      const error = new DocumentAiError(`Document AI failed job ${jobId}.`, 502, safeDetail(payload));
+      error.jobId = jobId;
+      error.jobStatus = 'FAILED';
+      throw error;
     }
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
-  throw new DocumentAiError(
-    `Job ${jobId} is still ${lastStatus} after ${Math.round((Date.now() - started) / 1000)} seconds. Open that job in Document AI or try the invoice again.`,
+  const error = new DocumentAiError(
+    `Job ${jobId} is still ${lastStatus} after ${Math.round((Date.now() - started) / 1000)} seconds.`,
     504
   );
+  error.pending = true;
+  error.jobId = jobId;
+  error.jobStatus = lastStatus;
+  throw error;
+}
+
+function jobPhase(status) {
+  const value = String(status || '').toUpperCase();
+  if (value === 'DONE' || value === 'CONFIRMED') return 'done';
+  if (value === 'FAILED') return 'failed';
+  return 'pending';
+}
+
+async function fetchJob(config, token, jobId) {
+  const jobsUrl = `${config.apiUrl.replace(/\/+$/, '')}/document/jobs`;
+  let resultResponse;
+  try {
+    resultResponse = await axios.get(`${jobsUrl}/${encodeURIComponent(jobId)}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      params: { extractedValues: true },
+      timeout: 20000,
+      validateStatus: () => true
+    });
+  } catch (error) {
+    throw new DocumentAiError(`Could not read job ${jobId}. ${error.message}`, 502);
+  }
+  if (resultResponse.status !== 200) {
+    throw new DocumentAiError(
+      `Could not read job ${jobId} (${resultResponse.status}).`,
+      502,
+      safeDetail(resultResponse.data)
+    );
+  }
+  return resultResponse.data || {};
+}
+
+function rememberComparison(jobId, record) {
+  if (!jobId) return;
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+  for (const [id, saved] of openComparisons) {
+    if (saved.at < cutoff) openComparisons.delete(id);
+  }
+  openComparisons.set(String(jobId), { ...record, at: Date.now() });
+}
+
+function comparisonFromJob(record, payload) {
+  const status = String(payload && payload.status || '').toUpperCase();
+  const phase = jobPhase(status);
+  const jobId = record.jobId;
+  if (phase === 'pending') {
+    return {
+      pending: true,
+      jobId,
+      status,
+      message: `Document AI job ${jobId} is still ${status}.`
+    };
+  }
+  if (phase === 'failed') {
+    return compareResponse(record.schema, record.file, {
+      ok: false,
+      pending: false,
+      error: `Document AI failed job ${jobId}.`,
+      detail: safeDetail(payload),
+      status: 'FAILED',
+      jobId,
+      header: [],
+      lineItems: []
+    }, record.coreSide, false);
+  }
+  const merged = mergeExtraction(record.schema, payload);
+  return compareResponse(record.schema, record.file, {
+    ok: true,
+    pending: false,
+    status,
+    jobId,
+    header: merged.header,
+    lineItems: merged.lineItems
+  }, record.coreSide, false);
 }
 
 function schemaRecords(data) {
@@ -893,9 +957,11 @@ async function settle(work) {
   } catch (error) {
     return {
       ok: false,
+      pending: Boolean(error.pending),
       error: error.message || 'Extraction failed.',
       detail: error.detail || '',
-      status: 'FAILED',
+      status: error.jobStatus || 'FAILED',
+      jobId: error.jobId || null,
       header: [],
       lineItems: []
     };
@@ -933,7 +999,9 @@ async function extractWithAiCore(file, schema, body) {
     filename: file.originalname,
     schema,
     resourceGroup: body.resourceGroup,
-    deploymentId: body.deploymentId
+    deploymentId: body.deploymentId,
+    modelName: body.modelName,
+    executableId: body.executableId
   });
   return {
     ok: true,
@@ -942,7 +1010,9 @@ async function extractWithAiCore(file, schema, body) {
     header: live.header,
     lineItems: live.lineItems,
     deploymentId: live.deploymentId,
-    resourceGroup: live.resourceGroup
+    resourceGroup: live.resourceGroup,
+    modelName: live.modelName || '',
+    usage: live.usage || null
   };
 }
 
@@ -959,7 +1029,10 @@ function singleResponse(source, file, schema, live) {
     file: requestFile(file),
     schema: schemaSummary(schema),
     header: live.header,
-    lineItems: live.lineItems
+    lineItems: live.lineItems,
+    modelName: live.modelName || '',
+    deploymentId: live.deploymentId || '',
+    usage: live.usage || null
   };
 }
 
@@ -972,6 +1045,7 @@ function compareResponse(schema, file, documentSide, coreSide, sample) {
     schema: schemaSummary(schema),
     documentAi: {
       ok: documentSide.ok !== false,
+      pending: Boolean(documentSide.pending),
       error: documentSide.error || '',
       detail: documentSide.detail || '',
       status: documentSide.status || '',
@@ -981,7 +1055,11 @@ function compareResponse(schema, file, documentSide, coreSide, sample) {
       ok: coreSide.ok !== false,
       error: coreSide.error || '',
       detail: coreSide.detail || '',
-      status: coreSide.status || ''
+      status: coreSide.status || '',
+      modelName: coreSide.modelName || '',
+      deploymentId: coreSide.deploymentId || '',
+      resourceGroup: coreSide.resourceGroup || '',
+      usage: coreSide.usage || null
     },
     comparison: compareExtractions(documentSide, coreSide)
   };
@@ -1030,6 +1108,15 @@ function registerRoutes(app) {
     }
   });
 
+  app.get('/api/models', async (req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(await aiCore.listChatModels({ resourceGroup: req.query.resourceGroup }));
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   app.get('/api/schemas', (req, res) => {
     try {
       res.set('Cache-Control', 'no-store');
@@ -1073,6 +1160,34 @@ function registerRoutes(app) {
     return next(error);
   });
 
+  app.get('/api/document-jobs/:jobId', async (req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      const jobId = String(req.params.jobId || '');
+      if (!/^[A-Za-z0-9-]{8,80}$/.test(jobId)) {
+        return res.status(400).json({ error: 'Document AI job id is not valid.' });
+      }
+      const saved = openComparisons.get(jobId);
+      if (!saved) {
+        return res.status(404).json({
+          error: 'Run Compare both again. This Document AI job is not attached to a comparison.'
+        });
+      }
+      const config = loadConfig();
+      const missing = missingKeys(config);
+      if (missing.length) {
+        throw new DocumentAiError(`Document AI is not configured. Add ${missing.join(', ')} to default-env.json.`, 400);
+      }
+      const token = await getToken(config);
+      const payload = await fetchJob(config, token, jobId);
+      const result = comparisonFromJob(saved, payload);
+      if (!result.pending) openComparisons.delete(jobId);
+      return res.json(result);
+    } catch (error) {
+      return sendError(res, error);
+    }
+  });
+
   app.post('/api/extract', (req, res) => {
     upload.single('file')(req, res, async (uploadError) => {
       if (uploadError) {
@@ -1099,6 +1214,14 @@ function registerRoutes(app) {
             settle(() => extractWithDocumentAi(req.file, schema, req.body)),
             settle(() => extractWithAiCore(req.file, schema, req.body))
           ]);
+          if (documentSide.pending && documentSide.jobId) {
+            rememberComparison(documentSide.jobId, {
+              schema,
+              file: { originalname: req.file.originalname || '', size: req.file.size || 0 },
+              coreSide,
+              jobId: documentSide.jobId
+            });
+          }
           return res.json(compareResponse(schema, req.file, documentSide, coreSide, false));
         }
         if (source === 'document') {
@@ -1133,6 +1256,8 @@ module.exports = {
   customSchemaChoices,
   listLocalSchemas,
   compareExtractions,
+  comparisonFromJob,
+  jobPhase,
   sourceFrom,
   registerRoutes,
   sampleLines,

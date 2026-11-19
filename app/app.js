@@ -1,10 +1,15 @@
 (function () {
   const state = {
+    documentJobId: '',
     schema: null,
     header: [],
     lineItems: [],
     currency: 'INR',
-    busy: false
+    busy: false,
+    configuredDeploymentId: '',
+    geminiDeploymentId: '',
+    geminiModel: 'gemini-2.5-flash',
+    models: []
   };
 
   const dropzone = document.getElementById('dropzone');
@@ -15,15 +20,20 @@
   const schemaInput = document.getElementById('schema-file');
   const message = document.getElementById('message');
   const guide = document.getElementById('guide');
-
-  document.getElementById('open-guide').addEventListener('click', () => guide.showModal());
-  document.getElementById('close-guide').addEventListener('click', () => guide.close());
+  const closeGuide = document.getElementById('close-guide');
+  if (closeGuide) closeGuide.addEventListener('click', () => guide.close());
   document.getElementById('schema-name').addEventListener('change', () => useSelectedSchema());
   document.querySelectorAll('input[name="source"]').forEach(input => {
     input.addEventListener('change', syncSourceFields);
   });
   syncSourceFields();
+  document.getElementById('model-name').addEventListener('change', applyModelChoice);
+  document.getElementById('resource-group').addEventListener('change', () => loadModels());
+  document.getElementById('gemini-deployment-id').addEventListener('change', () => fillModelSelect(state.models, document.getElementById('model-name').value));
+  document.getElementById('gemini-model').addEventListener('change', () => fillModelSelect(state.models, document.getElementById('model-name').value));
+  document.getElementById('deployment-id').addEventListener('change', () => fillModelSelect(state.models, document.getElementById('model-name').value));
   document.getElementById('extract').addEventListener('click', () => extract('live'));
+  document.getElementById('check-document-job').addEventListener('click', checkDocumentJob);
   document.getElementById('sample').addEventListener('click', () => extract('sample'));
   document.getElementById('probe').addEventListener('click', probe);
   document.getElementById('load-schema').addEventListener('click', () => schemaInput.click());
@@ -68,7 +78,7 @@
       ]);
       applySchema(schema);
       renderConnection(status);
-      await loadSchemaChoices();
+      await Promise.all([loadSchemaChoices(), loadModels()]);
     } catch (error) {
       showMessage('negative', error.message);
     }
@@ -186,10 +196,10 @@
       hint.innerHTML = 'Document AI extracts with the schema name and version. The client is usually <code>default</code>. A template is required when the schema fields use manual setup.';
       extract.textContent = 'Extract invoice';
     } else if (source === 'both') {
-      hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. Fill in the AI Core deployment and the Document AI client before extracting.';
+      hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. The Model menu chooses which running AI Core deployment to compare with Document AI.';
       extract.textContent = 'Extract with both';
     } else {
-      hint.innerHTML = 'AI Core sends the schema fields to the deployed model. Resource group is usually <code>default</code>. Deployment ID is the running foundation-model deployment.';
+      hint.innerHTML = 'GPT and Gemini each have their own deployment ID. Choose the model above. The two IDs are filled from <code>default-env.json</code>.';
       extract.textContent = 'Extract invoice';
     }
   }
@@ -205,10 +215,133 @@
     }
   }
 
+  function selectedModel() {
+    const select = document.getElementById('model-name');
+    const option = select.selectedOptions && select.selectedOptions[0];
+    if (!option || option.value === 'gpt') {
+      return { modelName: '', deploymentId: document.getElementById('deployment-id').value.trim(), executableId: 'azure-openai' };
+    }
+    return {
+      modelName: option.dataset.modelName || '',
+      deploymentId: option.dataset.deploymentId || '',
+      executableId: option.dataset.executableId || ''
+    };
+  }
+
+  function localGemini() {
+    const deploymentId = document.getElementById('gemini-deployment-id').value.trim();
+    const modelName = document.getElementById('gemini-model').value.trim() || 'gemini-2.5-flash';
+    if (!deploymentId || modelName.toLowerCase().includes('embed')) return null;
+    return {
+      modelName,
+      modelVersion: 'latest',
+      deploymentId,
+      executableId: 'gcp-vertexai',
+      deployed: true,
+      usable: true,
+      reason: ''
+    };
+  }
+
+  function canExtract(name) {
+    const model = String(name || '').trim().toLowerCase();
+    if (!model) return false;
+    if (model.includes('embed') || model.includes('realtime') || model.includes('whisper') || model.includes('tts') || model.includes('dall') || model.includes('transcrib') || model.includes('imagen')) return false;
+    if (model.includes('-image') || model.endsWith('image') || model.includes('sap-rpt') || model.includes('rpt-') || model.includes('codex')) return false;
+    return true;
+  }
+
+  function modelsForMenu(models) {
+    const list = (models || []).map(item => ({ ...item }));
+    const gemini = localGemini();
+    if (gemini && canExtract(gemini.modelName)) {
+      const existing = list.find(item => item.deploymentId === gemini.deploymentId);
+      const runningSameName = list.find(item => item.deployed && String(item.modelName || '').toLowerCase() === gemini.modelName.toLowerCase());
+      if (existing) {
+        if (!existing.modelName) existing.modelName = gemini.modelName;
+        existing.executableId = existing.executableId || 'gcp-vertexai';
+        existing.deployed = true;
+        existing.usable = true;
+        existing.reason = '';
+      } else if (!runningSameName && !list.length) {
+        list.unshift(gemini);
+      }
+    }
+    return list.filter(item => item.deployed && item.usable !== false && canExtract(item.modelName));
+  }
+
+  function applyModelChoice() {
+    const choice = selectedModel();
+    if (choice.executableId === 'azure-openai' && !choice.modelName && state.configuredDeploymentId && !document.getElementById('deployment-id').value.trim()) {
+      document.getElementById('deployment-id').value = state.configuredDeploymentId;
+    }
+  }
+
+  function fillModelSelect(models, previous) {
+    const select = document.getElementById('model-name');
+    const current = previous != null ? previous : select.value;
+    const gptId = document.getElementById('deployment-id').value.trim();
+    const menu = modelsForMenu(models).slice().sort((left, right) => {
+      if (left.deploymentId === gptId) return -1;
+      if (right.deploymentId === gptId) return 1;
+      return left.modelName.localeCompare(right.modelName);
+    });
+    select.replaceChildren();
+    const knownGpt = menu.some(model => model.deploymentId === gptId);
+    if (gptId && !knownGpt) {
+      const fallback = document.createElement('option');
+      fallback.value = 'gpt';
+      fallback.textContent = 'GPT';
+      select.appendChild(fallback);
+    }
+    menu.forEach(model => {
+      const option = document.createElement('option');
+      option.value = model.deploymentId;
+      option.dataset.modelName = model.modelName;
+      option.dataset.deploymentId = model.deploymentId || '';
+      option.dataset.executableId = model.executableId || '';
+      option.textContent = model.modelName;
+      select.appendChild(option);
+    });
+    if ([...select.options].some(option => option.value === current && !option.disabled)) select.value = current;
+    applyModelChoice();
+  }
+
+  async function loadModels() {
+    const note = document.getElementById('model-note');
+    const select = document.getElementById('model-name');
+    const previous = select.value;
+    const group = document.getElementById('resource-group').value.trim();
+    try {
+      const response = await fetch(`/api/models?resourceGroup=${encodeURIComponent(group)}`);
+      const body = await readJson(response);
+      state.models = body.models || [];
+      if (body.resourceGroup) document.getElementById('resource-group').value = body.resourceGroup;
+      fillModelSelect(state.models, previous === '' ? 'gpt' : previous);
+      const shown = modelsForMenu(state.models);
+      if (shown.length || document.getElementById('deployment-id').value.trim()) {
+        note.textContent = 'The menu lists running chat models only.';
+      } else if (body.error) note.textContent = body.error;
+      else note.textContent = 'No chat model is deployed yet. Add a GPT or Gemini deployment ID under Request options.';
+    } catch (error) {
+      fillModelSelect([], '');
+      note.textContent = error.message;
+    }
+  }
+
   function renderConnection(status) {
     document.getElementById('resource-group').value = status.resourceGroup || 'default';
+    if (status.deploymentId) state.configuredDeploymentId = status.deploymentId;
+    if (status.geminiDeploymentId) state.geminiDeploymentId = status.geminiDeploymentId;
+    if (status.geminiModel) state.geminiModel = status.geminiModel;
     if (!document.getElementById('deployment-id').value) {
-      document.getElementById('deployment-id').value = status.deploymentId || '';
+      document.getElementById('deployment-id').value = state.configuredDeploymentId;
+    }
+    if (!document.getElementById('gemini-deployment-id').value) {
+      document.getElementById('gemini-deployment-id').value = state.geminiDeploymentId;
+    }
+    if (!document.getElementById('gemini-model').value) {
+      document.getElementById('gemini-model').value = state.geminiModel || 'gemini-2.5-flash';
     }
     const documentStatus = status.documentAi || {};
     if (!document.getElementById('dox-client').value) {
@@ -392,8 +525,12 @@
     form.set('schemaName', document.getElementById('schema-name').value.trim());
     form.set('schemaVersion', document.getElementById('schema-version').value.trim());
     form.set('documentType', document.getElementById('document-type').value);
+    const choice = selectedModel();
     form.set('resourceGroup', document.getElementById('resource-group').value.trim());
-    form.set('deploymentId', document.getElementById('deployment-id').value.trim());
+    form.set('modelName', choice.modelName);
+    form.set('executableId', choice.executableId);
+    const geminiChoice = choice.executableId === 'gcp-vertexai' || String(choice.modelName || '').toLowerCase().startsWith('gemini');
+    form.set('deploymentId', choice.deploymentId || (geminiChoice ? document.getElementById('gemini-deployment-id').value.trim() : document.getElementById('deployment-id').value.trim()));
     form.set('doxClient', document.getElementById('dox-client').value.trim());
     form.set('template', document.getElementById('template').value.trim());
     if (file) form.set('file', file);
@@ -424,6 +561,7 @@
     }
     document.getElementById('single-results').hidden = false;
     document.getElementById('compare').hidden = true;
+    renderUsage(result.source === 'document' || result.mode === 'sample' ? null : result.usage);
     state.header = result.header || [];
     state.lineItems = result.lineItems || [];
     const currency = state.header.find(field => field.name === 'currencyCode');
@@ -438,25 +576,34 @@
       return;
     }
     const job = result.jobId ? ` Job ${result.jobId}.` : '';
+    const model = result.modelName ? ` Model ${result.modelName}.` : '';
     if (!filled) {
-      showMessage('critical', `${sourceName} finished with no values.${job}`);
+      showMessage('critical', `${sourceName} finished with no values.${job}${model}`);
       return;
     }
-    showMessage('positive', `${sourceName} extraction ${result.status}.${job}`);
+    showMessage('positive', `${sourceName} extraction ${result.status}.${job}${model}`);
   }
 
   function renderComparison(result) {
     document.getElementById('single-results').hidden = true;
     const panel = document.getElementById('compare');
     panel.hidden = false;
+    renderUsage(result.sample ? null : result.aiCore && result.aiCore.usage);
     const comparison = result.comparison || { header: [], lineItems: [], summary: {} };
     const summary = comparison.summary || {};
+    const model = result.aiCore && result.aiCore.modelName ? ` AI Core model: ${result.aiCore.modelName}.` : '';
     document.getElementById('compare-summary').textContent = result.sample
       ? `Sample only. ${summary.headerMatch || 0} header fields match and ${summary.headerDiffer || 0} differ.`
-      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.`;
+      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.${model}`;
     const errors = document.getElementById('compare-errors');
     errors.replaceChildren();
-    if (result.documentAi && result.documentAi.ok === false) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
+    const documentPending = Boolean(result.documentAi && result.documentAi.pending && result.documentAi.jobId);
+    state.documentJobId = documentPending ? result.documentAi.jobId : '';
+    const checkJob = document.getElementById('check-document-job');
+    checkJob.hidden = !documentPending;
+    checkJob.disabled = false;
+    checkJob.textContent = 'Check Document AI status';
+    if (result.documentAi && result.documentAi.ok === false && !documentPending) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
     if (result.aiCore && result.aiCore.ok === false) errors.appendChild(errorStrip(`AI Core: ${result.aiCore.error}`));
     const tbody = document.querySelector('#compare-header tbody');
     tbody.replaceChildren();
@@ -492,6 +639,11 @@
       showMessage('information', 'Sample invoice only. Neither service was called. The comparison uses the same sample on both sides.');
       return;
     }
+    if (documentPending) {
+      const detail = result.documentAi.error || `Document AI job ${result.documentAi.jobId} is still ${result.documentAi.status || 'PENDING'}.`;
+      showMessage('information', `${detail} AI Core is already in this comparison. Check Document AI status to load it here.`);
+      return;
+    }
     if ((result.documentAi && result.documentAi.ok === false) || (result.aiCore && result.aiCore.ok === false)) {
       showMessage('critical', 'One extraction did not finish. The comparison shows the values that did come back.');
       return;
@@ -501,6 +653,34 @@
       return;
     }
     showMessage('positive', 'Document AI and AI Core returned the same values.');
+  }
+
+  async function checkDocumentJob() {
+    const jobId = state.documentJobId;
+    if (!jobId || state.busy) return;
+    const button = document.getElementById('check-document-job');
+    setBusy(true);
+    button.disabled = true;
+    button.textContent = 'Checking Document AI…';
+    showMessage('information', `Checking Document AI job ${jobId}.`);
+    try {
+      const response = await fetch(`/api/document-jobs/${encodeURIComponent(jobId)}`);
+      const body = await readJson(response);
+      if (body.pending) {
+        showMessage('information', `${body.message || `Document AI job ${jobId} is still ${body.status}.`} AI Core stays in this comparison.`);
+        return;
+      }
+      renderComparison(body);
+    } catch (error) {
+      showMessage('negative', error.message);
+    } finally {
+      setBusy(false);
+      if (state.documentJobId) {
+        button.hidden = false;
+        button.disabled = false;
+        button.textContent = 'Check Document AI status';
+      }
+    }
   }
 
   function errorStrip(text) {
@@ -592,6 +772,55 @@
       setBusy(false);
       schemaInput.value = '';
     }
+  }
+
+  function renderUsage(usage) {
+    const panel = document.getElementById('usage');
+    const facts = document.getElementById('usage-facts');
+    const note = document.getElementById('usage-note');
+    if (!usage || (usage.totalTokens == null && usage.promptTokens == null && usage.completionTokens == null)) {
+      panel.hidden = true;
+      facts.replaceChildren();
+      return;
+    }
+    const items = [
+      ['Model', usage.reportedModel || usage.model],
+      ['Selected model', usage.model && usage.model !== usage.reportedModel ? usage.model : ''],
+      ['Deployment', usage.deploymentId],
+      ['Resource group', usage.resourceGroup],
+      ['Executable', usage.executableId],
+      ['Input tokens', formatCount(usage.inputTokens)],
+      ['Output tokens', formatCount(usage.outputTokens)],
+      ['Prompt tokens', formatCount(usage.promptTokens)],
+      ['Completion tokens', formatCount(usage.completionTokens)],
+      ['Total tokens', formatCount(usage.totalTokens)]
+    ];
+    if (usage.cachedTokens) items.push(['Cached input tokens', formatCount(usage.cachedTokens)]);
+    if (usage.reasoningTokens) items.push(['Reasoning tokens', formatCount(usage.reasoningTokens)]);
+    (usage.promptDetails || []).forEach(item => items.push([`Prompt ${String(item.modality).toLowerCase()}`, formatCount(item.tokens)]));
+    (usage.completionDetails || []).forEach(item => items.push([`Completion ${String(item.modality).toLowerCase()}`, formatCount(item.tokens)]));
+    if (usage.calls > 1) items.push(['AI Core calls', String(usage.calls)]);
+    facts.replaceChildren(...items.filter(([, value]) => value !== '' && value != null).map(([label, value]) => usageFact(label, value)));
+    note.textContent = usage.calls > 1
+      ? 'Counts are the sum of the AI Core calls for this extraction. Prompt tokens are the input. Completion tokens are the output.'
+      : 'Prompt tokens are the input. Completion tokens are the output. The counts come from the model response.';
+    panel.hidden = false;
+  }
+
+  function usageFact(label, value) {
+    const card = document.createElement('article');
+    card.className = 'facet';
+    const caption = document.createElement('span');
+    caption.textContent = label;
+    const strong = document.createElement('strong');
+    strong.textContent = value;
+    card.append(caption, strong);
+    return card;
+  }
+
+  function formatCount(value) {
+    if (value == null || value === '') return '';
+    return new Intl.NumberFormat('en-IN').format(value);
   }
 
   function renderFacets() {
@@ -876,6 +1105,7 @@
       button.disabled = busy;
     });
     document.getElementById('schema-name').disabled = busy;
+    document.getElementById('model-name').disabled = busy;
   }
 
   async function readJson(response) {

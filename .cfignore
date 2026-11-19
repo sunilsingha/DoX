@@ -1,0 +1,11 @@
+node_modules/
+.git/
+default-env.json
+default-*.json
+!default-env.sample.json
+*.db
+*.mtar
+mta_archives/
+test/
+.gen/
+schema/.active

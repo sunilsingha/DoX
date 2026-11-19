@@ -101,6 +101,8 @@ function loadConfig() {
     clientSecret: pick(file, 'AICORE_CLIENT_SECRET') || vcap.clientSecret,
     resourceGroup: pick(file, 'AICORE_RESOURCE_GROUP') || 'default',
     deploymentId: pick(file, 'AICORE_DEPLOYMENT_ID'),
+    geminiDeploymentId: pick(file, 'AICORE_GEMINI_DEPLOYMENT_ID'),
+    geminiModel: pick(file, 'AICORE_GEMINI_MODEL') || 'gemini-2.5-flash',
     apiVersion
   };
 }
@@ -124,7 +126,9 @@ function publicStatus() {
     tokenHost: hostOf(config.tokenUrl),
     apiHost: hostOf(config.apiUrl),
     resourceGroup: config.resourceGroup || 'default',
-    deploymentId: config.deploymentId || ''
+    deploymentId: config.deploymentId || '',
+    geminiDeploymentId: config.geminiDeploymentId || '',
+    geminiModel: config.geminiModel || 'gemini-2.5-flash'
   };
 }
 
@@ -359,7 +363,100 @@ function userContent(schema, prepared) {
   return `${prompt}\n\nDOCUMENT TEXT:\n${prepared.text}`;
 }
 
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function readUsage(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const gemini = payload.usageMetadata || payload.usage_metadata;
+  if (gemini && typeof gemini === 'object') {
+    const prompt = finiteNumber(gemini.promptTokenCount);
+    const completion = finiteNumber(gemini.candidatesTokenCount);
+    const thoughts = finiteNumber(gemini.thoughtsTokenCount);
+    const total = finiteNumber(gemini.totalTokenCount);
+    return {
+      model: payload.modelVersion || payload.model || '',
+      inputTokens: prompt,
+      outputTokens: completion,
+      promptTokens: prompt,
+      completionTokens: completion,
+      totalTokens: total != null ? total : [prompt, completion, thoughts].reduce((sum, value) => sum + (value || 0), 0),
+      cachedTokens: finiteNumber(gemini.cachedContentTokenCount),
+      reasoningTokens: thoughts,
+      promptDetails: tokenDetails(gemini.promptTokensDetails),
+      completionDetails: tokenDetails(gemini.candidatesTokensDetails)
+    };
+  }
+  const openai = payload.usage;
+  if (!openai || typeof openai !== 'object') return null;
+  const prompt = finiteNumber(openai.prompt_tokens);
+  const completion = finiteNumber(openai.completion_tokens);
+  const total = finiteNumber(openai.total_tokens);
+  const promptDetails = openai.prompt_tokens_details || {};
+  const completionDetails = openai.completion_tokens_details || {};
+  return {
+    model: payload.model || '',
+    inputTokens: prompt,
+    outputTokens: completion,
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: total != null ? total : (prompt || 0) + (completion || 0),
+    cachedTokens: finiteNumber(promptDetails.cached_tokens),
+    reasoningTokens: finiteNumber(completionDetails.reasoning_tokens),
+    promptDetails: [],
+    completionDetails: []
+  };
+}
+
+function tokenDetails(details) {
+  if (!Array.isArray(details)) return [];
+  return details.map(item => ({
+    modality: String((item && (item.modality || item.type)) || 'text'),
+    tokens: finiteNumber(item && (item.tokenCount || item.tokens))
+  })).filter(item => item.tokens != null);
+}
+
+function combineUsage(parts, context) {
+  const rows = (parts || []).filter(Boolean);
+  if (!rows.length) return null;
+  const sum = key => {
+    const values = rows.map(row => row[key]).filter(value => value != null);
+    if (!values.length) return null;
+    return values.reduce((total, value) => total + value, 0);
+  };
+  const mergeDetails = key => {
+    const totals = new Map();
+    rows.forEach(row => (row[key] || []).forEach(item => {
+      totals.set(item.modality, (totals.get(item.modality) || 0) + item.tokens);
+    }));
+    return [...totals.entries()].map(([modality, tokens]) => ({ modality, tokens }));
+  };
+  const last = [...rows].reverse().find(row => row.model) || rows[rows.length - 1];
+  const extra = context || {};
+  return {
+    model: extra.modelName || last.model || '',
+    reportedModel: last.model || extra.modelName || '',
+    deploymentId: extra.deploymentId || '',
+    resourceGroup: extra.resourceGroup || '',
+    executableId: extra.executableId || '',
+    inputTokens: sum('inputTokens'),
+    outputTokens: sum('outputTokens'),
+    promptTokens: sum('promptTokens'),
+    completionTokens: sum('completionTokens'),
+    totalTokens: sum('totalTokens'),
+    cachedTokens: sum('cachedTokens'),
+    reasoningTokens: sum('reasoningTokens'),
+    promptDetails: mergeDetails('promptDetails'),
+    completionDetails: mergeDetails('completionDetails'),
+    calls: rows.length
+  };
+}
+
 function messageText(payload) {
+  const geminiParts = payload && payload.candidates && payload.candidates[0] && payload.candidates[0].content && payload.candidates[0].content.parts;
+  if (Array.isArray(geminiParts)) return geminiParts.map(part => (part && part.text) || '').join('\n');
   const choice = payload && payload.choices && payload.choices[0];
   const content = choice && choice.message && choice.message.content;
   if (typeof content === 'string') return content;
@@ -421,25 +518,490 @@ function mapExtraction(schema, parsed) {
   return { header, lineItems };
 }
 
+function parameterValue(bindings, key) {
+  const wanted = String(key).toLowerCase();
+  const found = (Array.isArray(bindings) ? bindings : []).find(item => {
+    const name = String((item && (item.key || item.name)) || '').toLowerCase();
+    return name === wanted;
+  });
+  if (!found || found.value == null) return '';
+  return String(found.value).trim();
+}
+
+function modelFromDeployment(deployment) {
+  const details = (deployment && deployment.details) || {};
+  const resources = details.resources || {};
+  const scaling = details.scaling || {};
+  const backend = resources.backendDetails
+    || resources.backend_details
+    || scaling.backendDetails
+    || scaling.backend_details
+    || details.backendDetails
+    || details.backend_details
+    || {};
+  const model = backend.model || deployment.model || {};
+  const modelName = model.name || deployment.modelName || parameterValue(deployment && deployment.parameterBindings, 'modelName');
+  const modelVersion = model.version || deployment.modelVersion || parameterValue(deployment && deployment.parameterBindings, 'modelVersion');
+  return {
+    modelName: String(modelName || '').trim(),
+    modelVersion: String(modelVersion || '').trim()
+  };
+}
+
+function modelRole(name) {
+  const model = String(name || '').trim().toLowerCase();
+  if (!model) return 'unknown';
+  if (model.includes('embed')) return 'embedding';
+  if (
+    model.includes('realtime')
+    || model.includes('whisper')
+    || model.includes('tts')
+    || model.includes('dall')
+    || model.includes('transcrib')
+    || model.includes('imagen')
+    || model.includes('-image')
+    || model.endsWith('image')
+    || model.includes('sap-rpt')
+    || model.includes('rpt-')
+    || model.includes('codex')
+  ) return 'other';
+  return 'chat';
+}
+
+function isChatModel(name) {
+  return modelRole(name) === 'chat';
+}
+
+function providerFor(model) {
+  const executable = String((model && model.executableId) || '').toLowerCase();
+  const name = String((model && model.modelName) || model || '').toLowerCase();
+  if (executable === 'gcp-vertexai' || name.startsWith('gemini')) return 'gemini';
+  return 'openai';
+}
+
+function modelUse(name) {
+  const role = modelRole(name);
+  if (role === 'chat') return { usable: true, reason: '' };
+  if (role === 'embedding') {
+    return {
+      usable: false,
+      reason: `${name} is an embedding model. It cannot read an invoice. Deploy a Gemini chat model on the gcp-vertexai executable, with modelName gemini-2.5-flash and modelVersion latest.`
+    };
+  }
+  return { usable: false, reason: `${name} cannot extract an invoice.` };
+}
+
+function reasoningModel(modelName) {
+  const name = String(modelName || '').trim().toLowerCase();
+  return /^o\d/.test(name) || name.startsWith('gpt-5');
+}
+
+function supportedModelNames(executable) {
+  const parameters = (executable && (executable.parameters || executable.parameterDefinitions)) || [];
+  const model = parameters.find(item => String(item && item.name || '').toLowerCase() === 'modelname');
+  const text = String((model && model.description) || '');
+  const match = text.match(/supportedModels:\s*([\s\S]+)/i);
+  if (!match) return [];
+  return match[1]
+    .replace(/\.\.\..*$/, '')
+    .split(/[,\n]/)
+    .map(item => item.replace(/\.$/, '').trim())
+    .filter(item => item && !/\s/.test(item));
+}
+
+function joinModelCatalog({ configurations, deployments }) {
+  const configs = new Map((configurations || []).filter(item => item && item.id).map(item => [item.id, item]));
+  const deployed = [];
+  (deployments || []).forEach(deployment => {
+    if (!deployment || String(deployment.status || '').toUpperCase() !== 'RUNNING') return;
+    const configuration = configs.get(deployment.configurationId) || {};
+    const bindings = configuration.parameterBindings || deployment.parameterBindings || [];
+    const fromDetails = modelFromDeployment(deployment);
+    const modelName = parameterValue(bindings, 'modelName') || fromDetails.modelName;
+    const modelVersion = parameterValue(bindings, 'modelVersion') || fromDetails.modelVersion || 'latest';
+    const scenarioId = configuration.scenarioId || deployment.scenarioId || '';
+    if (scenarioId && scenarioId !== 'foundation-models') return;
+    if (!isChatModel(modelName)) return;
+    const use = modelUse(modelName);
+    deployed.push({
+      modelName,
+      modelVersion,
+      deploymentId: deployment.id,
+      executableId: configuration.executableId || deployment.executableId || (providerFor(modelName) === 'gemini' ? 'gcp-vertexai' : 'azure-openai'),
+      configurationName: configuration.name || deployment.configurationName || '',
+      deployed: true,
+      usable: use.usable,
+      reason: use.reason
+    });
+  });
+  return deployed.sort((left, right) => left.modelName.localeCompare(right.modelName));
+}
+
+function configuredGemini(config) {
+  const deploymentId = String((config && config.geminiDeploymentId) || '').trim();
+  if (!deploymentId) return null;
+  const modelName = String((config && config.geminiModel) || 'gemini-2.5-flash').trim() || 'gemini-2.5-flash';
+  const use = modelUse(modelName);
+  return {
+    modelName,
+    modelVersion: 'latest',
+    deploymentId,
+    executableId: 'gcp-vertexai',
+    configurationName: 'AICORE_GEMINI_DEPLOYMENT_ID',
+    deployed: true,
+    usable: use.usable,
+    reason: use.reason
+  };
+}
+
+function mergeConfiguredModels(models, config) {
+  const list = (models || []).map(item => ({ ...item }));
+  const gemini = configuredGemini(config);
+  if (!gemini) return list;
+  const existing = list.find(item => item.deploymentId === gemini.deploymentId);
+  if (existing) {
+    if (!existing.modelName) existing.modelName = gemini.modelName;
+    existing.executableId = existing.executableId || 'gcp-vertexai';
+    existing.deployed = true;
+    existing.usable = gemini.usable;
+    existing.reason = gemini.reason;
+    return list;
+  }
+  const runningSameName = list.find(item => item.deployed && String(item.modelName || '').toLowerCase() === gemini.modelName.toLowerCase());
+  if (runningSameName) {
+    runningSameName.executableId = runningSameName.executableId || 'gcp-vertexai';
+    return list;
+  }
+  if (list.length) return list;
+  return [gemini];
+}
+
+function configuredIds(config) {
+  return [config && config.deploymentId, config && config.geminiDeploymentId]
+    .map(id => String(id || '').trim())
+    .filter(Boolean);
+}
+
+function runningDeployments(deployments) {
+  return (deployments || []).filter(item => {
+    if (!item || !item.id) return false;
+    const status = String(item.status || '').toUpperCase();
+    return !status || status === 'RUNNING';
+  });
+}
+
+function catalogRank(catalog, wanted) {
+  const running = new Set(runningDeployments(catalog && catalog.deployments).map(item => item.id));
+  return (wanted || []).filter(id => running.has(id)).length;
+}
+
+function chooseCatalog(preferredGroup, catalogs, wanted) {
+  const preferred = (catalogs || []).find(item => item.resourceGroup === preferredGroup) || (catalogs || [])[0];
+  return (catalogs || []).reduce((best, item) => (
+    catalogRank(item, wanted) > catalogRank(best, wanted) ? item : best
+  ), preferred);
+}
+
+function includeConfiguredDeployments(models, deployments, config) {
+  const running = new Map(runningDeployments(deployments).map(item => [item.id, item]));
+  const list = (models || []).map(item => ({ ...item }));
+  const add = (id, fallbackName, executableId) => {
+    if (!id || !running.has(id)) return;
+    const deployment = running.get(id);
+    const fromDetails = modelFromDeployment(deployment);
+    const modelName = fromDetails.modelName || fallbackName;
+    if (modelName && !isChatModel(modelName)) return;
+    const executable = deployment.executableId || executableId || (String(modelName).toLowerCase().startsWith('gemini') ? 'gcp-vertexai' : 'azure-openai');
+    const existing = list.find(item => item.deploymentId === id);
+    if (existing) {
+      if (!existing.modelName && modelName) existing.modelName = modelName;
+      if (!existing.executableId) existing.executableId = executable;
+      return;
+    }
+    list.push({
+      modelName: modelName || 'GPT',
+      modelVersion: fromDetails.modelVersion || 'latest',
+      deploymentId: id,
+      executableId: executable,
+      deployed: true,
+      usable: true,
+      reason: ''
+    });
+  };
+  add(String((config && config.deploymentId) || '').trim(), '', 'azure-openai');
+  add(String((config && config.geminiDeploymentId) || '').trim(), String((config && config.geminiModel) || '').trim(), 'gcp-vertexai');
+  return list;
+}
+
+function pickDeployment(models, modelName, deploymentId) {
+  const wanted = String(modelName || '').trim().toLowerCase();
+  if (!wanted) return null;
+  const matches = (models || []).filter(item => item.deployed && item.usable !== false && item.modelName.toLowerCase() === wanted);
+  if (!matches.length) return null;
+  if (deploymentId) return matches.find(item => item.deploymentId === deploymentId) || null;
+  return matches[0];
+}
+
+function geminiParts(content) {
+  const items = Array.isArray(content) ? content : [typeof content === 'string' ? { type: 'text', text: content } : content];
+  return items.map(item => {
+    if (!item) return null;
+    if (typeof item === 'string') return { text: item };
+    if (item.type === 'text') return { text: item.text || '' };
+    const source = item.type === 'image_url'
+      ? (item.image_url && item.image_url.url) || ''
+      : (item.file && item.file.file_data) || '';
+    const match = String(source).match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) return null;
+    return { inlineData: { mimeType: match[1], data: match[2] } };
+  }).filter(Boolean);
+}
+
+function geminiPayload(content, options = {}) {
+  const generationConfig = { temperature: 0, maxOutputTokens: 8192 };
+  if (options.json !== false) generationConfig.responseMimeType = 'application/json';
+  if (options.thinking !== false) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  return {
+    systemInstruction: {
+      parts: [{ text: 'You extract business documents into the requested JSON schema. Reply with JSON only.' }]
+    },
+    contents: [{ role: 'user', parts: geminiParts(content) }],
+    generationConfig
+  };
+}
+
+function chatPayload(modelName, content) {
+  const payload = {
+    messages: [
+      {
+        role: 'system',
+        content: 'You extract business documents into the requested JSON schema. Reply with JSON only.'
+      },
+      { role: 'user', content }
+    ]
+  };
+  if (reasoningModel(modelName)) payload.max_completion_tokens = 4096;
+  else {
+    payload.temperature = 0;
+    payload.max_tokens = 4096;
+  }
+  return payload;
+}
+
 function inferenceUrl(config, deploymentId) {
   return `${config.apiUrl}/v2/inference/deployments/${encodeURIComponent(deploymentId)}/chat/completions`;
 }
 
-async function completeChat(config, token, group, deployment, content) {
-  const params = {};
-  if (config.apiVersion && config.apiVersion.toLowerCase() !== 'none') params['api-version'] = config.apiVersion;
+function geminiUrl(config, deploymentId, modelName) {
+  return `${config.apiUrl}/v2/inference/deployments/${encodeURIComponent(deploymentId)}/models/${encodeURIComponent(modelName)}:generateContent`;
+}
+
+async function aiCoreGet(config, token, group, pathname, params) {
+  let response;
   try {
-    return await axios.post(inferenceUrl(config, deployment), {
-      messages: [
-        {
-          role: 'system',
-          content: 'You extract business documents into the requested JSON schema. Reply with JSON only.'
-        },
-        { role: 'user', content }
-      ],
-      temperature: 0,
-      max_tokens: 4096
-    }, {
+    response = await axios.get(`${config.apiUrl}${pathname}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'AI-Resource-Group': group,
+        Accept: 'application/json'
+      },
+      params,
+      timeout: 30000,
+      validateStatus: () => true
+    });
+  } catch (error) {
+    throw new AiCoreError(`Could not reach SAP AI Core. ${error.message}`, 502);
+  }
+  if (response.status !== 200) {
+    throw new AiCoreError(
+      `SAP AI Core did not list deployments (${response.status}). ${safeDetail(response.data)}`.trim(),
+      response.status >= 400 && response.status < 500 ? response.status : 502,
+      safeDetail(response.data)
+    );
+  }
+  return response.data || {};
+}
+
+async function listResources(config, token, group, pathname, params) {
+  const resources = [];
+  const seen = new Set();
+  let skip = 0;
+  const top = 100;
+  for (let page = 0; page < 10; page += 1) {
+    const data = await aiCoreGet(config, token, group, pathname, { ...params, $top: top, $skip: skip });
+    const batch = Array.isArray(data.resources) ? data.resources : [];
+    let added = 0;
+    batch.forEach(item => {
+      const id = item && item.id;
+      if (id && seen.has(id)) return;
+      if (id) seen.add(id);
+      resources.push(item);
+      added += 1;
+    });
+    if (!added || batch.length < top) break;
+    skip += batch.length;
+  }
+  return resources;
+}
+
+async function hydrateConfigurations(config, token, group, deployments, listed) {
+  const byId = new Map((listed || []).filter(item => item && item.id).map(item => [item.id, item]));
+  const ids = [...new Set((deployments || []).map(item => item && item.configurationId).filter(Boolean))];
+  await Promise.all(ids.slice(0, 30).map(async id => {
+    const current = byId.get(id);
+    if (current && parameterValue(current.parameterBindings, 'modelName')) return;
+    try {
+      const full = await aiCoreGet(config, token, group, `/v2/lm/configurations/${encodeURIComponent(id)}`);
+      byId.set(id, { ...(current || {}), ...full, id });
+    } catch (error) {
+      /* deployment details can still name the model */
+    }
+  }));
+  return [...byId.values()];
+}
+
+const catalogMemory = new Map();
+
+async function loadCatalog(config, token, group) {
+  const key = `${config.apiUrl}|${group}`;
+  const hit = catalogMemory.get(key);
+  if (hit && Date.now() - hit.at < 60000) return hit.catalog;
+  const [configurations, deployments] = await Promise.all([
+    listResources(config, token, group, '/v2/lm/configurations', { scenarioId: 'foundation-models' }),
+    listResources(config, token, group, '/v2/lm/deployments', { scenarioId: 'foundation-models', status: 'RUNNING' })
+  ]);
+  const hydrated = await hydrateConfigurations(config, token, group, deployments, configurations);
+  const catalog = {
+    resourceGroup: group,
+    deployments,
+    models: joinModelCatalog({ configurations: hydrated, deployments })
+  };
+  catalogMemory.set(key, { at: Date.now(), catalog });
+  return catalog;
+}
+
+async function listResourceGroups(config, token, preferredGroup) {
+  try {
+    const data = await aiCoreGet(config, token, preferredGroup || 'default', '/v2/admin/resourceGroups');
+    const resources = Array.isArray(data.resources) ? data.resources : [];
+    return resources
+      .map(item => String((item && (item.resourceGroupId || item.id || item.name)) || '').trim())
+      .filter(Boolean)
+      .slice(0, 20);
+  } catch (error) {
+    return [];
+  }
+}
+
+async function resolveModelCatalog(config, token, preferredGroup) {
+  const wanted = configuredIds(config);
+  const preferred = await loadCatalog(config, token, preferredGroup);
+  const catalogs = [preferred];
+  if (wanted.length && catalogRank(preferred, wanted) < wanted.length) {
+    const groups = await listResourceGroups(config, token, preferredGroup);
+    for (const group of groups) {
+      if (!group || group === preferredGroup) continue;
+      try {
+        catalogs.push(await loadCatalog(config, token, group));
+      } catch (error) {
+        /* this key cannot read that resource group */
+      }
+      if (catalogRank(chooseCatalog(preferredGroup, catalogs, wanted), wanted) === wanted.length) break;
+    }
+  }
+  const best = chooseCatalog(preferredGroup, catalogs, wanted);
+  return {
+    resourceGroup: best.resourceGroup,
+    deployments: best.deployments,
+    models: includeConfiguredDeployments(best.models, best.deployments, config)
+  };
+}
+
+async function listChatModels({ resourceGroup } = {}) {
+  const config = loadConfig();
+  const group = String(resourceGroup || config.resourceGroup || 'default').trim() || 'default';
+  const saved = mergeConfiguredModels([], config);
+  const missing = missingKeys(config).filter(key => key !== 'AICORE_DEPLOYMENT_ID');
+  if (missing.length) {
+    return {
+      resourceGroup: group,
+      models: saved,
+      error: `Add ${missing.join(', ')} to default-env.json to list deployed models.`
+    };
+  }
+  try {
+    const token = await getToken(config);
+    const catalog = await resolveModelCatalog(config, token, group);
+    return {
+      resourceGroup: catalog.resourceGroup,
+      models: catalog.models,
+      error: ''
+    };
+  } catch (error) {
+    return {
+      resourceGroup: group,
+      models: saved,
+      error: error.message || 'Could not list foundation-model deployments.'
+    };
+  }
+}
+
+function deploymentExecutable(requested) {
+  return providerFor(requested) === 'gemini' ? 'gcp-vertexai' : 'azure-openai';
+}
+
+function directDeployment(requested, explicit, executableId) {
+  const use = modelUse(requested);
+  if (requested && !use.usable) throw new AiCoreError(use.reason, 400);
+  return {
+    deploymentId: explicit,
+    modelName: requested,
+    modelVersion: 'latest',
+    executableId: executableId || (requested ? deploymentExecutable(requested) : ''),
+    usable: true,
+    reason: ''
+  };
+}
+
+async function resolveChatDeployment(config, token, group, { modelName, deploymentId, executableId }, knownModels) {
+  const requested = String(modelName || '').trim();
+  const explicit = String(deploymentId || config.deploymentId || '').trim();
+  const executable = String(executableId || '').trim();
+  if (!requested && !explicit) {
+    throw new AiCoreError('Add AICORE_DEPLOYMENT_ID to default-env.json, or choose a deployed model.', 400);
+  }
+  let models = knownModels;
+  let resolvedGroup = group;
+  if (models == null) {
+    try {
+      const catalog = await resolveModelCatalog(config, token, group);
+      models = catalog.models;
+      resolvedGroup = catalog.resourceGroup;
+    } catch (error) {
+      if (requested && explicit) return { ...directDeployment(requested, explicit, executable), resourceGroup: group };
+      if (requested) throw error;
+      return { ...directDeployment('', explicit, executable), resourceGroup: group };
+    }
+  }
+  const withGroup = (match) => ({ ...match, resourceGroup: resolvedGroup });
+  if (!requested) {
+    const found = models.find(item => item.deployed && item.deploymentId === explicit);
+    if (found && found.usable === false) throw new AiCoreError(found.reason, 400);
+    return withGroup(found || directDeployment('', explicit, executable));
+  }
+  const match = pickDeployment(models, requested, explicit) || pickDeployment(models, requested, '');
+  if (match && match.usable === false) throw new AiCoreError(match.reason, 400);
+  if (match) return withGroup(match);
+  if (explicit) return withGroup(directDeployment(requested, explicit, executable));
+  throw new AiCoreError(
+    `${requested} has no RUNNING deployment in resource group ${resolvedGroup}. Create a ${deploymentExecutable(requested)} configuration with modelName ${requested} and modelVersion latest, deploy it, and wait until the status is RUNNING.`,
+    400
+  );
+}
+
+async function postInference(config, token, group, url, body, params) {
+  try {
+    return await axios.post(url, body, {
       headers: {
         Authorization: `Bearer ${token}`,
         'AI-Resource-Group': group,
@@ -455,6 +1017,21 @@ async function completeChat(config, token, group, deployment, content) {
   }
 }
 
+async function completeChat(config, token, group, deployment, content, model) {
+  const modelName = typeof model === 'string' ? model : (model && model.modelName) || '';
+  const executableId = typeof model === 'object' && model ? model.executableId : '';
+  if (providerFor({ modelName, executableId }) === 'gemini') {
+    if (modelRole(modelName) === 'embedding') throw new AiCoreError(modelUse(modelName).reason, 400);
+    const url = geminiUrl(config, deployment, modelName);
+    const response = await postInference(config, token, group, url, geminiPayload(content), {});
+    if (response.status !== 400) return response;
+    return postInference(config, token, group, url, geminiPayload(content, { json: false, thinking: false }), {});
+  }
+  const params = {};
+  if (config.apiVersion && config.apiVersion.toLowerCase() !== 'none') params['api-version'] = config.apiVersion;
+  return postInference(config, token, group, inferenceUrl(config, deployment), chatPayload(modelName, content), params);
+}
+
 function failedChat(response) {
   throw new AiCoreError(
     `SAP AI Core did not complete the extraction (${response.status}). ${safeDetail(response.data)}`.trim(),
@@ -463,11 +1040,12 @@ function failedChat(response) {
   );
 }
 
-async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId }) {
+async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId, modelName, executableId }) {
   const config = loadConfig();
+  const requestedModel = String(modelName || '').trim();
   const missing = missingKeys({
     ...config,
-    deploymentId: deploymentId || config.deploymentId
+    deploymentId: deploymentId || config.deploymentId || (requestedModel ? 'selected' : '')
   });
   if (missing.length) {
     throw new AiCoreError(`SAP AI Core is not configured. Add ${missing.join(', ')} to default-env.json.`, 400);
@@ -475,15 +1053,21 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   const prepared = await prepareDocument(buffer, filename);
   const token = await getToken(config);
   const group = String(resourceGroup || config.resourceGroup || 'default').trim() || 'default';
-  const deployment = String(deploymentId || config.deploymentId).trim();
-  let response = await completeChat(config, token, group, deployment, userContent(schema, prepared));
+  const resolved = await resolveChatDeployment(config, token, group, { modelName: requestedModel, deploymentId, executableId });
+  const deployment = resolved.deploymentId;
+  const model = resolved.modelName;
+  const inferenceGroup = resolved.resourceGroup || group;
+  const responses = [];
+  let response = await completeChat(config, token, inferenceGroup, deployment, userContent(schema, prepared), resolved);
+  responses.push(response);
   if (prepared.kind === 'pdf' && [400, 415, 422].includes(response.status)) {
     const text = await readPdfText(buffer);
     if (text.replace(/\s/g, '').length >= 40) {
-      response = await completeChat(config, token, group, deployment, userContent(schema, {
+      response = await completeChat(config, token, inferenceGroup, deployment, userContent(schema, {
         kind: 'text',
         text: text.slice(0, 60000)
-      }));
+      }), resolved);
+      responses.push(response);
     }
   }
   if (response.status !== 200) failedChat(response);
@@ -492,7 +1076,14 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   return {
     ...merged,
     deploymentId: deployment,
-    resourceGroup: group
+    resourceGroup: inferenceGroup,
+    modelName: model,
+    usage: combineUsage(responses.map(item => readUsage(item && item.data)), {
+      modelName: model,
+      deploymentId: deployment,
+      resourceGroup: inferenceGroup,
+      executableId: resolved.executableId || ''
+    })
   };
 }
 
@@ -508,5 +1099,22 @@ module.exports = {
   prepareDocument,
   userContent,
   readPdfText,
-  extractDocument
+  extractDocument,
+  isChatModel,
+  reasoningModel,
+  providerFor,
+  modelUse,
+  supportedModelNames,
+  joinModelCatalog,
+  mergeConfiguredModels,
+  chooseCatalog,
+  includeConfiguredDeployments,
+  resolveChatDeployment,
+  pickDeployment,
+  chatPayload,
+  geminiPayload,
+  messageText,
+  readUsage,
+  combineUsage,
+  listChatModels
 };
