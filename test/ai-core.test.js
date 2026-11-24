@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText, readUsage, combineUsage } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText, readUsage, combineUsage, linesFromItems, groupPages, planPdfJobs, textCoversDocument, mergeExtractions, salvageModelContent } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -28,6 +28,8 @@ const prompt = extractionPrompt(loadSchemaSync());
 assert.ok(prompt.includes('invoiceNumber'));
 assert.ok(prompt.includes('hsnCode'));
 assert.ok(prompt.includes('ZSFL_GST_Invoice'));
+assert.ok(prompt.includes('every line item'));
+assert.ok(extractionPrompt(schema, { pages: [3, 4], pageCount: 32 }).includes('page 3, 4 of 32'));
 
 assert.strictEqual(isChatModel('gpt-4o'), true);
 assert.strictEqual(isChatModel('gpt-4o-mini'), true);
@@ -198,10 +200,56 @@ assert.strictEqual(combined.deploymentId, 'dep-running');
 
 const miniPayload = chatPayload('gpt-4o-mini', 'extract');
 assert.strictEqual(miniPayload.temperature, 0);
-assert.strictEqual(miniPayload.max_tokens, 4096);
+assert.strictEqual(miniPayload.max_tokens, 16384);
 const reasoningPayload = chatPayload('o4-mini', 'extract');
 assert.strictEqual(reasoningPayload.temperature, undefined);
-assert.strictEqual(reasoningPayload.max_completion_tokens, 4096);
+assert.strictEqual(reasoningPayload.max_completion_tokens, 16384);
+const lined = linesFromItems([
+  { str: 'Bolt', transform: [1, 0, 0, 1, 40, 700] },
+  { str: '2', transform: [1, 0, 0, 1, 200, 700] },
+  { str: 'Nut', transform: [1, 0, 0, 1, 40, 680] },
+  { str: '4', transform: [1, 0, 0, 1, 200, 680] }
+]);
+assert.strictEqual(lined, 'Bolt 2\nNut 4');
+const grouped = groupPages([
+  { number: 1, text: 'a'.repeat(80) },
+  { number: 2, text: 'b'.repeat(80) },
+  { number: 3, text: 'c'.repeat(80) }
+], 120);
+assert.strictEqual(grouped.length, 3);
+const rich = [
+  { number: 1, text: 'invoice line '.repeat(20) },
+  { number: 2, text: 'invoice line '.repeat(20) }
+];
+assert.strictEqual(textCoversDocument(rich, 2), true);
+const planned = planPdfJobs([
+  { number: 1, text: 'invoice line '.repeat(20) },
+  { number: 2, text: '' }
+], 2);
+assert.strictEqual(planned[0].kind, 'text');
+assert.deepStrictEqual(planned[0].pages, [1]);
+assert.strictEqual(planned[1].kind, 'file');
+assert.deepStrictEqual(planned[1].pages, [2]);
+const mergedLines = mergeExtractions([
+  {
+    header: [{ name: 'invoiceNumber', value: '174221', confidence: 0.9 }, { name: 'buyerName', value: '', confidence: null }],
+    lineItems: [[{ name: 'description', value: 'Bolt', confidence: 0.8 }]]
+  },
+  {
+    header: [{ name: 'invoiceNumber', value: 'other', confidence: 0.2 }, { name: 'buyerName', value: 'Standard Products', confidence: 0.7 }],
+    lineItems: [
+      [{ name: 'description', value: '', confidence: null }],
+      [{ name: 'description', value: 'Nut', confidence: 0.6 }]
+    ]
+  }
+]);
+assert.strictEqual(mergedLines.header[0].value, '174221');
+assert.strictEqual(mergedLines.header[1].value, 'Standard Products');
+assert.strictEqual(mergedLines.lineItems.length, 2);
+assert.strictEqual(mergedLines.lineItems[1][0].value, 'Nut');
+const salvaged = salvageModelContent('{"header":{"invoiceNumber":{"value":"174221","confidence":0.9}},"lineItems":[{"description":{"value":"Bolt","confidence":0.8}},{"description":{"value":"Nut"');
+assert.strictEqual(salvaged.lineItems.length, 1);
+assert.strictEqual(salvaged.lineItems[0].description.value, 'Bolt');
 
 const detailCatalog = joinModelCatalog({
   configurations: [],
@@ -225,14 +273,20 @@ const local = listLocalSchemas();
 assert.ok(local.some(item => item.name === 'ZSFL_GST_Invoice'));
 
 function textPdf(text) {
-  const stream = `BT /F1 12 Tf 72 720 Td (${text}) Tj ET\n`;
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
-  ];
+  const texts = Array.isArray(text) ? text : [text];
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>'];
+  const kids = [];
+  const fontId = 3 + (texts.length * 2);
+  texts.forEach((pageText, index) => {
+    const pageId = 3 + (index * 2);
+    const contentId = pageId + 1;
+    kids.push(`${pageId} 0 R`);
+    const stream = `BT /F1 12 Tf 72 720 Td (${pageText}) Tj ET\n`;
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contentId} 0 R /Resources << /Font << /F1 ${fontId} 0 R >> >> >>`);
+    objects.push(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream`);
+  });
+  objects.splice(1, 0, `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${texts.length} >>`);
+  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
   let body = '%PDF-1.4\n';
   const offsets = [0];
   objects.forEach((entry, index) => {
@@ -258,6 +312,9 @@ prepareDocument(textPdf('Invoice ZSFL 26-27 0148 taxable amount 30940 supplier N
   assert.ok(content[1].file.file_data.startsWith('data:application/pdf;base64,'));
   const text = await readPdfText(textPdf('Invoice ZSFL 26-27 0148 taxable amount 30940 supplier Northwind Components'));
   assert.ok(text.includes('ZSFL 26-27 0148'));
+  const manyPages = await readPdfText(textPdf(['Page one bolt quantity 2', 'Page two nut quantity 4', 'Page three washer quantity 8']));
+  assert.ok(manyPages.includes('Page one bolt'));
+  assert.ok(manyPages.includes('Page three washer'));
   const compressed = zlib.deflateSync(Buffer.from('BT /F1 12 Tf 72 720 Td (Invoice ZSFL 26-27 0148 taxable amount 30940 supplier Northwind Components) Tj ET\n'));
   const compressedPdf = Buffer.concat([
     Buffer.from(`%PDF-1.4\n1 0 obj << /Length ${compressed.length} /Filter /FlateDecode >> stream\n`),

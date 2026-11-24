@@ -577,11 +577,13 @@
     }
     const job = result.jobId ? ` Job ${result.jobId}.` : '';
     const model = result.modelName ? ` Model ${result.modelName}.` : '';
+    const pages = result.pages ? ` ${result.pages} pages.` : '';
+    const lines = Array.isArray(result.lineItems) ? ` ${result.lineItems.length} line items.` : '';
     if (!filled) {
       showMessage('critical', `${sourceName} finished with no values.${job}${model}`);
       return;
     }
-    showMessage('positive', `${sourceName} extraction ${result.status}.${job}${model}`);
+    showMessage('positive', `${sourceName} extraction ${result.status}.${job}${model}${pages}${lines}`);
   }
 
   function renderComparison(result) {
@@ -592,9 +594,10 @@
     const comparison = result.comparison || { header: [], lineItems: [], summary: {} };
     const summary = comparison.summary || {};
     const model = result.aiCore && result.aiCore.modelName ? ` AI Core model: ${result.aiCore.modelName}.` : '';
+    const pages = result.aiCore && result.aiCore.pages ? ` AI Core pages: ${result.aiCore.pages}.` : '';
     document.getElementById('compare-summary').textContent = result.sample
       ? `Sample only. ${summary.headerMatch || 0} header fields match and ${summary.headerDiffer || 0} differ.`
-      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.${model}`;
+      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.${model}${pages}`;
     const errors = document.getElementById('compare-errors');
     errors.replaceChildren();
     const documentPending = Boolean(result.documentAi && result.documentAi.pending && result.documentAi.jobId);

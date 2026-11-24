@@ -182,10 +182,20 @@ function fieldLines(fields) {
   }).join('\n');
 }
 
-function extractionPrompt(schema) {
+const OUTPUT_TOKENS = 16384;
+const TEXT_CHUNK_CHARS = 12000;
+const PAGE_TEXT_CHARS = 40;
+const EXTRACT_CONCURRENCY = 3;
+
+function extractionPrompt(schema, scope) {
+  const coverage = scope && Array.isArray(scope.pages) && scope.pages.length
+    ? `This part is page ${scope.pages.join(', ')} of ${scope.pageCount}.`
+    : 'Read every page of the document.';
   return [
     `Extract the document into the schema "${schema.name}".`,
     'Return one JSON object and nothing else.',
+    coverage,
+    'Return every line item in this part, in the order printed. Do not stop after the first row or the first page, and do not return a sample row.',
     'Use an empty string for value when the document does not contain that field. Do not invent GSTINs, totals, or line items.',
     'confidence is your own estimate from 0 to 1, or null when the value is empty.',
     'Dates use YYYY-MM-DD. Numbers are JSON numbers, without currency symbols.',
@@ -276,7 +286,97 @@ function pdfStreamText(buffer) {
   return parts.join('\n');
 }
 
-async function pdfjsText(buffer) {
+function linesFromItems(items) {
+  const rows = [];
+  (items || []).forEach(item => {
+    const text = String((item && item.str) || '');
+    if (!text.trim()) return;
+    const y = item.transform ? Number(item.transform[5]) : 0;
+    const x = item.transform ? Number(item.transform[4]) : 0;
+    const last = rows[rows.length - 1];
+    if (last && Math.abs(last.y - y) <= 2) last.parts.push({ x, text });
+    else rows.push({ y, parts: [{ x, text }] });
+  });
+  return rows.map(row => row.parts
+    .sort((left, right) => left.x - right.x)
+    .map(part => part.text)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()).filter(Boolean).join('\n');
+}
+
+function pageHasText(page) {
+  return String((page && page.text) || '').replace(/\s/g, '').length >= PAGE_TEXT_CHARS;
+}
+
+function groupPages(pages, maxChars = TEXT_CHUNK_CHARS) {
+  const groups = [];
+  let current = [];
+  let size = 0;
+  (pages || []).forEach(page => {
+    const length = String(page.text || '').length + 20;
+    if (current.length && size + length > maxChars) {
+      groups.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(page);
+    size += length;
+  });
+  if (current.length) groups.push(current);
+  return groups;
+}
+
+function planPdfJobs(pages, pageCount) {
+  const byNumber = new Map((pages || []).map(page => [page.number, page]));
+  const known = [...byNumber.keys()];
+  const count = Math.max(pageCount || 0, known.length ? Math.max(...known) : 0);
+  const jobs = [];
+  let run = [];
+  const flush = () => {
+    if (!run.length) return;
+    groupPages(run).forEach(group => {
+      jobs.push({
+        kind: 'text',
+        pages: group.map(page => page.number),
+        text: group.map(page => `Page ${page.number}\n${page.text}`).join('\n\n')
+      });
+    });
+    run = [];
+  };
+  for (let number = 1; number <= count; number += 1) {
+    const page = byNumber.get(number) || { number, text: '' };
+    if (pageHasText(page)) run.push(page);
+    else {
+      flush();
+      jobs.push({ kind: 'file', pages: [number] });
+    }
+  }
+  flush();
+  return jobs;
+}
+
+function splitText(text) {
+  const source = String(text || '');
+  if (source.length < 800) return [source];
+  const lines = source.split('\n');
+  if (lines.length < 4) {
+    const mid = Math.floor(source.length / 2);
+    return [source.slice(0, mid), source.slice(mid)].filter(part => part.trim());
+  }
+  const mid = Math.ceil(lines.length / 2);
+  return [lines.slice(0, mid).join('\n'), lines.slice(mid).join('\n')].filter(part => part.trim());
+}
+
+function textCoversDocument(pages, pageCount) {
+  const usable = (pages || []).filter(pageHasText);
+  const chars = usable.reduce((sum, page) => sum + page.text.replace(/\s/g, '').length, 0);
+  const count = Math.max(pageCount || 0, (pages || []).length);
+  if (!count) return false;
+  return usable.length >= Math.ceil(count / 2) && chars >= count * 80;
+}
+
+async function pdfjsPages(buffer) {
   let pdfjs;
   const log = console.log;
   console.log = () => {};
@@ -296,23 +396,47 @@ async function pdfjsText(buffer) {
     standardFontDataUrl: `${fontDir}${path.sep}`
   }).promise;
   const pages = [];
-  const last = Math.min(document.numPages, 5);
-  for (let number = 1; number <= last; number += 1) {
+  for (let number = 1; number <= document.numPages; number += 1) {
     const page = await document.getPage(number);
     const content = await page.getTextContent();
-    pages.push(content.items.map(item => item.str).join(' '));
+    pages.push({ number, text: linesFromItems(content.items) });
   }
-  return pages.join('\n');
+  return pages;
+}
+
+async function readPdfPages(buffer) {
+  try {
+    const pages = await pdfjsPages(buffer);
+    if (pages.some(page => page.text.replace(/\s/g, '').length >= 20)) return pages;
+  } catch (error) {
+    /* a compressed or unusual PDF can still be read from its streams */
+  }
+  const text = pdfStreamText(buffer);
+  return text ? [{ number: 1, text }] : [];
 }
 
 async function readPdfText(buffer) {
+  const pages = await readPdfPages(buffer);
+  return pages.map(page => page.text).filter(Boolean).join('\n\n');
+}
+
+async function pdfPageCount(buffer) {
   try {
-    const text = await pdfjsText(buffer);
-    if (text.replace(/\s/g, '').length >= 40) return text;
+    const { PDFDocument } = require('pdf-lib');
+    const document = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    return document.getPageCount();
   } catch (error) {
-    /* the model can still receive the PDF, and the plain reader is the backup */
+    return 0;
   }
-  return pdfStreamText(buffer);
+}
+
+async function slicePdf(buffer, pageNumber) {
+  const { PDFDocument } = require('pdf-lib');
+  const source = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  const output = await PDFDocument.create();
+  const [page] = await output.copyPages(source, [pageNumber - 1]);
+  output.addPage(page);
+  return Buffer.from(await output.save());
 }
 
 async function prepareDocument(buffer, filename) {
@@ -337,8 +461,8 @@ async function prepareDocument(buffer, filename) {
   throw new AiCoreError('Upload a PDF, PNG, or JPEG invoice.', 400);
 }
 
-function userContent(schema, prepared) {
-  const prompt = extractionPrompt(schema);
+function userContent(schema, prepared, scope) {
+  const prompt = extractionPrompt(schema, scope);
   if (prepared.kind === 'image') {
     return [
       { type: 'text', text: prompt },
@@ -758,7 +882,7 @@ function geminiParts(content) {
 }
 
 function geminiPayload(content, options = {}) {
-  const generationConfig = { temperature: 0, maxOutputTokens: 8192 };
+  const generationConfig = { temperature: 0, maxOutputTokens: OUTPUT_TOKENS };
   if (options.json !== false) generationConfig.responseMimeType = 'application/json';
   if (options.thinking !== false) generationConfig.thinkingConfig = { thinkingBudget: 0 };
   return {
@@ -780,10 +904,10 @@ function chatPayload(modelName, content) {
       { role: 'user', content }
     ]
   };
-  if (reasoningModel(modelName)) payload.max_completion_tokens = 4096;
+  if (reasoningModel(modelName)) payload.max_completion_tokens = OUTPUT_TOKENS;
   else {
     payload.temperature = 0;
-    payload.max_tokens = 4096;
+    payload.max_tokens = OUTPUT_TOKENS;
   }
   return payload;
 }
@@ -1040,6 +1164,204 @@ function failedChat(response) {
   );
 }
 
+function responseTruncated(payload) {
+  const reason = payload && payload.choices && payload.choices[0] && payload.choices[0].finish_reason;
+  if (reason === 'length') return true;
+  const gemini = payload && payload.candidates && payload.candidates[0] && payload.candidates[0].finishReason;
+  return gemini === 'MAX_TOKENS';
+}
+
+function matchingBrace(source, start) {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escape) escape = false;
+      else if (char === '\\') escape = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function salvageModelContent(text) {
+  const source = String(text || '');
+  const itemsAt = source.indexOf('"lineItems"');
+  if (itemsAt < 0) return null;
+  const arrayStart = source.indexOf('[', itemsAt);
+  if (arrayStart < 0) return null;
+  const rows = [];
+  let index = arrayStart + 1;
+  while (index < source.length) {
+    const start = source.indexOf('{', index);
+    if (start < 0) break;
+    const end = matchingBrace(source, start);
+    if (end < 0) break;
+    try {
+      rows.push(JSON.parse(source.slice(start, end + 1)));
+    } catch (error) {
+      break;
+    }
+    index = end + 1;
+  }
+  if (!rows.length) return null;
+  let header = {};
+  const headerAt = source.indexOf('"header"');
+  if (headerAt >= 0 && headerAt < itemsAt) {
+    const start = source.indexOf('{', headerAt);
+    const end = start >= 0 ? matchingBrace(source, start) : -1;
+    if (end > start) {
+      try {
+        header = JSON.parse(source.slice(start, end + 1));
+      } catch (error) {
+        header = {};
+      }
+    }
+  }
+  return { header, lineItems: rows };
+}
+
+function rowHasValue(row) {
+  return (row || []).some(cell => cell && cell.value !== '' && cell.value != null);
+}
+
+function dropEmptyLines(extracted) {
+  if (!extracted) return { header: [], lineItems: [] };
+  return {
+    header: extracted.header || [],
+    lineItems: (extracted.lineItems || []).filter(rowHasValue)
+  };
+}
+
+function mergeExtractions(parts) {
+  const lists = (parts || []).filter(Boolean);
+  if (!lists.length) return { header: [], lineItems: [] };
+  const header = (lists[0].header || []).map(field => ({ ...field }));
+  lists.slice(1).forEach(part => {
+    (part.header || []).forEach(field => {
+      const target = header.find(item => item.name === field.name);
+      if (!target) return;
+      const empty = target.value === '' || target.value == null;
+      if (empty && field.value !== '' && field.value != null) {
+        target.value = field.value;
+        target.confidence = field.confidence;
+      }
+    });
+  });
+  return dropEmptyLines({
+    header,
+    lineItems: lists.flatMap(part => part.lineItems || [])
+  });
+}
+
+async function mapPool(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+function readModelExtraction(schema, payload) {
+  const text = messageText(payload);
+  try {
+    return dropEmptyLines(mapExtraction(schema, parseModelContent(text)));
+  } catch (error) {
+    if (!responseTruncated(payload)) throw error;
+    const salvaged = salvageModelContent(text);
+    if (!salvaged) throw error;
+    return dropEmptyLines(mapExtraction(schema, salvaged));
+  }
+}
+
+async function extractPrepared(context, prepared, scope, responses, depth = 0) {
+  const response = await completeChat(
+    context.config,
+    context.token,
+    context.group,
+    context.deployment,
+    userContent(context.schema, prepared, scope),
+    context.model
+  );
+  responses.push(response);
+  const fileRejected = prepared.kind === 'pdf' && [400, 415, 422].includes(response.status);
+  if (fileRejected && scope && scope.fallbackText && scope.fallbackText.replace(/\s/g, '').length >= 40) {
+    return extractPrepared(context, { kind: 'text', text: scope.fallbackText }, scope, responses, depth);
+  }
+  if (response.status !== 200) failedChat(response);
+  const truncated = responseTruncated(response.data);
+  let parsed = null;
+  try {
+    parsed = readModelExtraction(context.schema, response.data);
+  } catch (error) {
+    if (!truncated || prepared.kind !== 'text' || depth >= 4) throw error;
+  }
+  if (!truncated || prepared.kind !== 'text' || depth >= 4) return parsed;
+  const pieces = splitText(prepared.text);
+  if (pieces.length < 2) {
+    if (parsed) return parsed;
+    throw new AiCoreError('SAP AI Core stopped before all line items were returned.', 502);
+  }
+  const parts = [];
+  for (const piece of pieces) {
+    parts.push(await extractPrepared(context, { kind: 'text', text: piece }, scope, responses, depth + 1));
+  }
+  return mergeExtractions(parts);
+}
+
+async function extractPdf(context, buffer, responses) {
+  const pages = await readPdfPages(buffer);
+  const counted = await pdfPageCount(buffer);
+  const pageCount = Math.max(counted, pages.length);
+  if (!pageCount) {
+    const merged = await extractPrepared(context, {
+      kind: 'pdf',
+      filename: 'invoice.pdf',
+      base64: buffer.toString('base64')
+    }, { pages: [1], pageCount: 1 }, responses);
+    return { merged, pageCount: 1 };
+  }
+  const covered = textCoversDocument(pages, pageCount);
+  const jobs = covered
+    ? planPdfJobs(pages, pageCount)
+    : Array.from({ length: pageCount }, (_, index) => ({ kind: 'file', pages: [index + 1] }));
+  if (!jobs.length) {
+    throw new AiCoreError('The PDF has no pages to extract.', 400);
+  }
+  const parts = await mapPool(jobs, EXTRACT_CONCURRENCY, async job => {
+    const scope = { pages: job.pages, pageCount };
+    if (job.kind === 'text') {
+      return extractPrepared(context, { kind: 'text', text: job.text }, scope, responses);
+    }
+    const slice = pageCount > 1 ? await slicePdf(buffer, job.pages[0]) : buffer;
+    const page = pages.find(item => item.number === job.pages[0]);
+    return extractPrepared(context, {
+      kind: 'pdf',
+      filename: `page-${job.pages[0]}.pdf`,
+      base64: slice.toString('base64')
+    }, { ...scope, fallbackText: page && page.text }, responses);
+  });
+  return { merged: mergeExtractions(parts), pageCount };
+}
+
 async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId, modelName, executableId }) {
   const config = loadConfig();
   const requestedModel = String(modelName || '').trim();
@@ -1057,24 +1379,21 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   const deployment = resolved.deploymentId;
   const model = resolved.modelName;
   const inferenceGroup = resolved.resourceGroup || group;
+  const context = {
+    config,
+    token,
+    group: inferenceGroup,
+    deployment,
+    model: resolved,
+    schema
+  };
   const responses = [];
-  let response = await completeChat(config, token, inferenceGroup, deployment, userContent(schema, prepared), resolved);
-  responses.push(response);
-  if (prepared.kind === 'pdf' && [400, 415, 422].includes(response.status)) {
-    const text = await readPdfText(buffer);
-    if (text.replace(/\s/g, '').length >= 40) {
-      response = await completeChat(config, token, inferenceGroup, deployment, userContent(schema, {
-        kind: 'text',
-        text: text.slice(0, 60000)
-      }), resolved);
-      responses.push(response);
-    }
-  }
-  if (response.status !== 200) failedChat(response);
-  const parsed = parseModelContent(messageText(response.data));
-  const merged = mapExtraction(schema, parsed);
+  const outcome = prepared.kind === 'pdf'
+    ? await extractPdf(context, buffer, responses)
+    : { merged: await extractPrepared(context, prepared, null, responses), pageCount: 0 };
   return {
-    ...merged,
+    ...outcome.merged,
+    pages: outcome.pageCount || undefined,
     deploymentId: deployment,
     resourceGroup: inferenceGroup,
     modelName: model,
@@ -1114,6 +1433,13 @@ module.exports = {
   chatPayload,
   geminiPayload,
   messageText,
+  linesFromItems,
+  groupPages,
+  planPdfJobs,
+  textCoversDocument,
+  splitText,
+  mergeExtractions,
+  salvageModelContent,
   readUsage,
   combineUsage,
   listChatModels
