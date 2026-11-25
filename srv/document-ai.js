@@ -1135,6 +1135,35 @@ function compareResponse(schema, file, documentSide, coreSide, sample) {
   };
 }
 
+function readSide(side) {
+  return {
+    ok: side.ok !== false,
+    error: side.error || '',
+    detail: side.detail || '',
+    status: side.status || '',
+    modelName: side.modelName || '',
+    deploymentId: side.deploymentId || '',
+    resourceGroup: side.resourceGroup || '',
+    pages: side.pages || undefined,
+    usage: side.usage || null,
+    header: side.header || [],
+    lineItems: side.lineItems || []
+  };
+}
+
+function compareReadResponse(schema, file, ocrSide, visionSide, sample) {
+  return {
+    mode: 'compare-read',
+    source: 'aicore',
+    sample: Boolean(sample),
+    file: requestFile(file),
+    schema: schemaSummary(schema),
+    ocr: readSide(ocrSide),
+    vision: readSide(visionSide),
+    comparison: compareExtractions(ocrSide, visionSide)
+  };
+}
+
 function registerRoutes(app) {
   const pdfjsRoot = path.join(projectRoot(), 'node_modules', 'pdfjs-dist');
   app.use('/vendor/pdfjs/standard_fonts', express.static(path.join(pdfjsRoot, 'standard_fonts')));
@@ -1274,10 +1303,20 @@ function registerRoutes(app) {
         if (mode === 'sample') {
           const sample = buildSampleResult(schema, req.file);
           if (source === 'both') return res.json(compareResponse(schema, req.file, sampleSide(sample), sampleSide(sample), true));
+          if (source !== 'document' && aiCore.inputModeFrom(req.body.inputMode) === 'both') {
+            return res.json(compareReadResponse(schema, req.file, sampleSide(sample), sampleSide(sample), true));
+          }
           return res.json({ ...sample, source });
         }
         if (!req.file) {
           return res.status(400).json({ error: 'Choose an invoice file first, or preview the sample.' });
+        }
+        if (source !== 'document' && source !== 'both' && aiCore.inputModeFrom(req.body.inputMode) === 'both') {
+          const [ocrSide, visionSide] = await Promise.all([
+            settle(() => extractWithAiCore(req.file, schema, { ...req.body, inputMode: 'ocr' })),
+            settle(() => extractWithAiCore(req.file, schema, { ...req.body, inputMode: 'vision' }))
+          ]);
+          return res.json(compareReadResponse(schema, req.file, ocrSide, visionSide, false));
         }
         if (source === 'both') {
           const [documentSide, coreSide] = await Promise.all([
@@ -1326,6 +1365,7 @@ module.exports = {
   customSchemaChoices,
   listLocalSchemas,
   compareExtractions,
+  compareReadResponse,
   comparisonFromJob,
   jobPhase,
   sourceFrom,

@@ -7,6 +7,8 @@ assert.strictEqual(inputModeFrom('ocr'), 'ocr');
 assert.strictEqual(inputModeFrom('PaddleOCR'), 'ocr');
 assert.strictEqual(inputModeFrom('paddle-ocr'), 'ocr');
 assert.strictEqual(inputModeFrom('vision'), 'vision');
+assert.strictEqual(inputModeFrom('both'), 'both');
+assert.strictEqual(inputModeFrom('ocr-vision'), 'both');
 assert.strictEqual(inputModeFrom(''), 'vision');
 assert.strictEqual(inputModeFrom(undefined), 'vision');
 

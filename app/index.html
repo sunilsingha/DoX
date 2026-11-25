@@ -42,6 +42,7 @@
       <div class="source-toggle input-mode-toggle for-aicore" role="radiogroup" aria-labelledby="input-mode-label">
         <label><input type="radio" name="input-mode" value="ocr" /> PaddleOCR then LLM</label>
         <label><input type="radio" name="input-mode" value="vision" checked /> Vision LLM</label>
+        <label class="for-read-compare"><input type="radio" name="input-mode" value="both" /> Compare both</label>
       </div>
       <label class="model-picker for-aicore" for="model-name">
         Model
@@ -149,7 +150,20 @@
             </div>
             <button type="button" class="btn" id="usage-toggle" aria-expanded="false" aria-controls="usage-facts">Show tokens</button>
           </div>
-          <div id="usage-facts" class="facets" hidden></div>
+          <div id="usage-facts" hidden>
+            <div id="usage-single" class="facets"></div>
+            <div id="usage-compare" class="usage-split" hidden>
+              <section>
+                <h3 id="usage-left-title">PaddleOCR then LLM</h3>
+                <div id="usage-left-facts" class="facets"></div>
+              </section>
+              <section>
+                <h3 id="usage-right-title">Vision LLM</h3>
+                <div id="usage-right-facts" class="facets"></div>
+              </section>
+            </div>
+            <p id="usage-delta" class="panel-sub" hidden></p>
+          </div>
         </section>
         <div id="single-results">
         <section id="facets" class="facets" hidden></section>
@@ -220,8 +234,8 @@
               <thead>
                 <tr>
                   <th scope="col">Field</th>
-                  <th scope="col">Document AI</th>
-                  <th scope="col">AI Core</th>
+                  <th scope="col" id="compare-left-col">Document AI</th>
+                  <th scope="col" id="compare-right-col">AI Core</th>
                 </tr>
               </thead>
               <tbody></tbody>

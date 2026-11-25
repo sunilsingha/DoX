@@ -35,7 +35,7 @@
     input.addEventListener('change', syncSourceFields);
   });
   document.querySelectorAll('input[name="input-mode"]').forEach(input => {
-    input.addEventListener('change', syncInputModeNote);
+    input.addEventListener('change', syncSourceFields);
   });
   syncSourceFields();
   document.getElementById('model-name').addEventListener('change', applyModelChoice);
@@ -212,7 +212,9 @@
 
   function selectedInputMode() {
     const picked = document.querySelector('input[name="input-mode"]:checked');
-    return picked && picked.value === 'ocr' ? 'ocr' : 'vision';
+    if (picked && picked.value === 'ocr') return 'ocr';
+    if (picked && picked.value === 'both') return 'both';
+    return 'vision';
   }
 
   function syncInputModeNote() {
@@ -223,15 +225,25 @@
       return;
     }
     note.hidden = false;
-    note.textContent = selectedInputMode() === 'ocr'
-      ? 'PaddleOCR reads pixels, then the selected model writes the schema JSON. On a digital PDF this costs about the same as Vision. On a scan it is usually cheaper.'
-      : 'Scans and photos are sent as images. A digital PDF with a text layer is already sent as text, so tokens look like PaddleOCR.';
+    const mode = selectedInputMode();
+    if (mode === 'ocr') {
+      note.textContent = 'PaddleOCR reads pixels, then the selected model writes the schema JSON. On a digital PDF this costs about the same as Vision. On a scan it is usually cheaper.';
+    } else if (mode === 'both') {
+      note.textContent = 'Both paths use the selected model. The comparison shows field values and a token breakup for PaddleOCR and for Vision.';
+    } else {
+      note.textContent = 'Scans and photos are sent as images. A digital PDF with a text layer is already sent as text, so tokens look like PaddleOCR.';
+    }
   }
 
   function syncSourceFields() {
     const source = selectedSource();
     document.querySelectorAll('.for-aicore').forEach(node => { node.hidden = source === 'document'; });
     document.querySelectorAll('.for-document').forEach(node => { node.hidden = source === 'aicore'; });
+    document.querySelectorAll('.for-read-compare').forEach(node => { node.hidden = source !== 'aicore'; });
+    if (source !== 'aicore' && selectedInputMode() === 'both') {
+      const vision = document.querySelector('input[name="input-mode"][value="vision"]');
+      if (vision) vision.checked = true;
+    }
     const hint = document.getElementById('source-hint');
     const extract = document.getElementById('extract');
     if (source === 'document') {
@@ -240,6 +252,9 @@
     } else if (source === 'both') {
       hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. The Model menu chooses which running AI Core deployment to compare with Document AI. Read with applies to the AI Core side.';
       extract.textContent = 'Extract with both';
+    } else if (selectedInputMode() === 'both') {
+      hint.innerHTML = 'PaddleOCR and Vision each call the selected model. The comparison marks fields that do not agree and shows a token breakup for both.';
+      extract.textContent = 'Compare OCR and Vision';
     } else {
       hint.innerHTML = 'GPT, Gemini, and Claude each have their own deployment. Choose the model above. GPT and Gemini IDs are filled from <code>default-env.json</code>.';
       extract.textContent = 'Extract invoice';
@@ -826,9 +841,11 @@
         : 'Uploading the invoice to Document AI and SAP AI Core.')
       : source === 'document'
         ? 'Uploading the invoice and waiting for Document AI.'
-        : inputMode === 'ocr'
-          ? 'Reading the invoice with PaddleOCR, then sending the text to the selected model.'
-          : 'Uploading the invoice and waiting for SAP AI Core.';
+        : inputMode === 'both'
+          ? 'Running PaddleOCR then the selected model, and Vision LLM, on the same invoice.'
+          : inputMode === 'ocr'
+            ? 'Reading the invoice with PaddleOCR, then sending the text to the selected model.'
+            : 'Uploading the invoice and waiting for SAP AI Core.';
     showMessage('information', mode === 'sample'
       ? 'Filling the tables with a sample GST invoice.'
       : waiting);
@@ -844,7 +861,7 @@
   }
 
   function showResult(result) {
-    if (result.mode === 'compare') {
+    if (result.mode === 'compare' || result.mode === 'compare-read') {
       renderComparison(result);
       return;
     }
@@ -880,17 +897,28 @@
     document.getElementById('single-results').hidden = true;
     const panel = document.getElementById('compare');
     panel.hidden = false;
-    renderUsage(result.sample ? null : result.aiCore && result.aiCore.usage);
+    const readCompare = result.mode === 'compare-read';
+    document.getElementById('compare-left-col').textContent = readCompare ? 'PaddleOCR then LLM' : 'Document AI';
+    document.getElementById('compare-right-col').textContent = readCompare ? 'Vision LLM' : 'AI Core';
+    if (result.sample) renderUsage(null);
+    else if (readCompare) renderUsagePair(result.ocr && result.ocr.usage, result.vision && result.vision.usage);
+    else renderUsage(result.aiCore && result.aiCore.usage);
     const comparison = result.comparison || { header: [], lineItems: [], summary: {} };
     const summary = comparison.summary || {};
-    const model = result.aiCore && result.aiCore.modelName ? ` AI Core model: ${result.aiCore.modelName}.` : '';
-    const pages = result.aiCore && result.aiCore.pages ? ` AI Core pages: ${result.aiCore.pages}.` : '';
-    const read = result.aiCore && result.aiCore.usage && result.aiCore.usage.inputMode === 'ocr'
+    const model = readCompare
+      ? ((result.ocr && result.ocr.modelName) || (result.vision && result.vision.modelName) ? ` Model ${(result.ocr && result.ocr.modelName) || result.vision.modelName}.` : '')
+      : (result.aiCore && result.aiCore.modelName ? ` AI Core model: ${result.aiCore.modelName}.` : '');
+    const pages = readCompare
+      ? ''
+      : (result.aiCore && result.aiCore.pages ? ` AI Core pages: ${result.aiCore.pages}.` : '');
+    const read = !readCompare && result.aiCore && result.aiCore.usage && result.aiCore.usage.inputMode === 'ocr'
       ? ' AI Core read with PaddleOCR then the selected model.'
       : '';
+    const leftLines = readCompare ? 'PaddleOCR' : 'Document AI';
+    const rightLines = readCompare ? 'Vision' : 'AI Core';
     document.getElementById('compare-summary').textContent = result.sample
       ? `Sample only. ${summary.headerMatch || 0} header fields match and ${summary.headerDiffer || 0} differ.`
-      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.${model}${pages}${read}`;
+      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. ${leftLines} lines: ${summary.documentLines || 0}. ${rightLines} lines: ${summary.coreLines || 0}.${model}${pages}${read}`;
     const errors = document.getElementById('compare-errors');
     errors.replaceChildren();
     const documentPending = Boolean(result.documentAi && result.documentAi.pending && result.documentAi.jobId);
@@ -899,8 +927,13 @@
     checkJob.hidden = !documentPending;
     checkJob.disabled = false;
     checkJob.textContent = 'Check Document AI status';
-    if (result.documentAi && result.documentAi.ok === false && !documentPending) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
-    if (result.aiCore && result.aiCore.ok === false) errors.appendChild(errorStrip(`AI Core: ${result.aiCore.error}`));
+    if (readCompare) {
+      if (result.ocr && result.ocr.ok === false) errors.appendChild(errorStrip(`PaddleOCR: ${result.ocr.error}`));
+      if (result.vision && result.vision.ok === false) errors.appendChild(errorStrip(`Vision LLM: ${result.vision.error}`));
+    } else {
+      if (result.documentAi && result.documentAi.ok === false && !documentPending) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
+      if (result.aiCore && result.aiCore.ok === false) errors.appendChild(errorStrip(`AI Core: ${result.aiCore.error}`));
+    }
     const tbody = document.querySelector('#compare-header tbody');
     tbody.replaceChildren();
     (comparison.header || []).forEach(field => tbody.appendChild(compareRow(field)));
@@ -934,12 +967,26 @@
       lines.appendChild(block);
     });
     if (result.sample) {
-      showMessage('information', 'Sample invoice only. Neither service was called. The comparison uses the same sample on both sides.');
+      showMessage('information', readCompare
+        ? 'Sample invoice only. Neither PaddleOCR nor Vision was called. The comparison uses the same sample on both sides.'
+        : 'Sample invoice only. Neither service was called. The comparison uses the same sample on both sides.');
       return;
     }
     if (documentPending) {
       const detail = result.documentAi.error || `Document AI job ${result.documentAi.jobId} is still ${result.documentAi.status || 'PENDING'}.`;
       showMessage('information', `${detail} AI Core is already in this comparison. Check Document AI status to load it here.`);
+      return;
+    }
+    if (readCompare) {
+      if ((result.ocr && result.ocr.ok === false) || (result.vision && result.vision.ok === false)) {
+        showMessage('critical', 'One read path did not finish. The comparison shows the values that did come back.');
+        return;
+      }
+      if (summary.differ) {
+        showMessage('information', `${summary.differ} values differ across PaddleOCR and Vision.`);
+        return;
+      }
+      showMessage('positive', 'PaddleOCR and Vision returned the same values.');
       return;
     }
     if ((result.documentAi && result.documentAi.ok === false) || (result.aiCore && result.aiCore.ok === false)) {
@@ -1093,16 +1140,12 @@
     toggle.textContent = usageOpen ? 'Hide tokens' : 'Show tokens';
   }
 
-  function renderUsage(usage) {
-    const panel = document.getElementById('usage');
-    const facts = document.getElementById('usage-facts');
-    const note = document.getElementById('usage-note');
-    const hasTokens = usage && (usage.totalTokens != null || usage.promptTokens != null || usage.completionTokens != null);
-    if (!usage || (!hasTokens && !usage.inputMode)) {
-      panel.hidden = true;
-      facts.replaceChildren();
-      return;
-    }
+  function hasUsage(usage) {
+    return Boolean(usage && (usage.totalTokens != null || usage.promptTokens != null || usage.completionTokens != null || usage.inputMode));
+  }
+
+  function usageItems(usage) {
+    if (!usage) return [];
     const ocr = usage.inputMode === 'ocr';
     const items = [
       ['Read with', ocr ? 'PaddleOCR then LLM' : 'Vision LLM'],
@@ -1126,9 +1169,72 @@
     (usage.promptDetails || []).forEach(item => items.push([`Prompt ${String(item.modality).toLowerCase()}`, formatCount(item.tokens)]));
     (usage.completionDetails || []).forEach(item => items.push([`Completion ${String(item.modality).toLowerCase()}`, formatCount(item.tokens)]));
     if (usage.calls > 1) items.push(['AI Core calls', String(usage.calls)]);
-    facts.replaceChildren(...items.filter(([, value]) => value !== '' && value != null).map(([label, value]) => usageFact(label, value)));
+    return items.filter(([, value]) => value !== '' && value != null);
+  }
+
+  function fillUsageHost(host, usage) {
+    host.replaceChildren(...usageItems(usage).map(([label, value]) => usageFact(label, value)));
+  }
+
+  function renderUsage(usage) {
+    const panel = document.getElementById('usage');
+    const single = document.getElementById('usage-single');
+    const split = document.getElementById('usage-compare');
+    const delta = document.getElementById('usage-delta');
+    const note = document.getElementById('usage-note');
+    document.getElementById('usage-title').textContent = 'AI Core usage';
+    split.hidden = true;
+    delta.hidden = true;
+    if (!hasUsage(usage)) {
+      panel.hidden = true;
+      single.replaceChildren();
+      return;
+    }
+    const ocr = usage.inputMode === 'ocr';
+    fillUsageHost(single, usage);
+    single.hidden = false;
     note.textContent = usageNote(usage, ocr);
     panel.hidden = false;
+    syncUsageToggle();
+  }
+
+  function usageDelta(ocrUsage, visionUsage) {
+    const parts = [];
+    const pair = (label, left, right) => {
+      if (left == null || right == null) return;
+      const diff = left - right;
+      if (diff === 0) parts.push(`${label} match.`);
+      else if (diff > 0) parts.push(`Vision used ${formatCount(diff)} fewer ${label.toLowerCase()}.`);
+      else parts.push(`PaddleOCR used ${formatCount(-diff)} fewer ${label.toLowerCase()}.`);
+    };
+    pair('Input tokens', ocrUsage && ocrUsage.inputTokens, visionUsage && visionUsage.inputTokens);
+    pair('Output tokens', ocrUsage && ocrUsage.outputTokens, visionUsage && visionUsage.outputTokens);
+    pair('Total tokens', ocrUsage && ocrUsage.totalTokens, visionUsage && visionUsage.totalTokens);
+    return parts.join(' ');
+  }
+
+  function renderUsagePair(ocrUsage, visionUsage) {
+    const panel = document.getElementById('usage');
+    const single = document.getElementById('usage-single');
+    const split = document.getElementById('usage-compare');
+    const delta = document.getElementById('usage-delta');
+    const note = document.getElementById('usage-note');
+    if (!hasUsage(ocrUsage) && !hasUsage(visionUsage)) {
+      panel.hidden = true;
+      return;
+    }
+    document.getElementById('usage-title').textContent = 'Token breakup';
+    single.hidden = true;
+    single.replaceChildren();
+    split.hidden = false;
+    fillUsageHost(document.getElementById('usage-left-facts'), ocrUsage);
+    fillUsageHost(document.getElementById('usage-right-facts'), visionUsage);
+    note.textContent = 'PaddleOCR and Vision each called the selected model. Input, output, prompt, completion, and total tokens are shown for both.';
+    const line = usageDelta(ocrUsage, visionUsage);
+    delta.hidden = !line;
+    delta.textContent = line;
+    panel.hidden = false;
+    usageOpen = true;
     syncUsageToggle();
   }
 

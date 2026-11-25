@@ -26,6 +26,7 @@ ensureCanvasDom();
 function inputModeFrom(value) {
   const mode = String(value || 'vision').trim().toLowerCase();
   if (mode === 'ocr' || mode === 'paddleocr' || mode === 'paddle' || mode === 'paddle-ocr') return 'ocr';
+  if (mode === 'both' || mode === 'compare' || mode === 'ocr-vision') return 'both';
   return 'vision';
 }
 
