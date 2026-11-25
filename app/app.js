@@ -20,6 +20,7 @@
   let previewPdf = null;
   let previewZoom = 1;
   let previewDrag = null;
+  let previewTextPages = [];
   let usageOpen = false;
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 3;
@@ -416,6 +417,8 @@
       previewLoadingTask = null;
     }
     previewPdf = null;
+    previewTextPages = [];
+    clearHighlights();
     const pages = document.getElementById('preview-pages');
     pages.hidden = true;
     pages.replaceChildren();
@@ -431,7 +434,7 @@
     previewZoom = Math.round(clamped * 100) / 100;
     const label = document.getElementById('preview-zoom-label');
     const pages = document.getElementById('preview-pages');
-    const image = document.getElementById('preview-image');
+    const imageWrap = document.getElementById('preview-image-wrap');
     const zoomOut = document.getElementById('preview-zoom-out');
     const zoomIn = document.getElementById('preview-zoom-in');
     label.textContent = `${Math.round(previewZoom * 100)}%`;
@@ -440,14 +443,15 @@
     const base = `${previewBaseWidth()}px`;
     pages.style.setProperty('--preview-zoom', String(previewZoom));
     pages.style.setProperty('--preview-base-width', base);
-    image.style.setProperty('--preview-zoom', String(previewZoom));
+    imageWrap.style.setProperty('--preview-zoom', String(previewZoom));
     syncPreviewCursor();
   }
 
   function previewHasDocument() {
     const pages = document.getElementById('preview-pages');
+    const imageWrap = document.getElementById('preview-image-wrap');
     const image = document.getElementById('preview-image');
-    return (!pages.hidden && pages.querySelector('canvas')) || (!image.hidden && image.getAttribute('src'));
+    return (!pages.hidden && pages.querySelector('canvas')) || (!imageWrap.hidden && image.getAttribute('src'));
   }
 
   function previewOverflows() {
@@ -506,6 +510,7 @@
 
   function setPreview(file) {
     const empty = document.getElementById('preview-empty');
+    const imageWrap = document.getElementById('preview-image-wrap');
     const image = document.getElementById('preview-image');
     const unsupported = document.getElementById('preview-unsupported');
     if (previewUrl) {
@@ -513,7 +518,7 @@
       previewUrl = '';
     }
     clearPdfPreview();
-    image.hidden = true;
+    imageWrap.hidden = true;
     image.removeAttribute('src');
     unsupported.hidden = true;
     if (!file) {
@@ -545,14 +550,14 @@
     previewUrl = URL.createObjectURL(file);
     image.alt = file.name || 'Uploaded invoice';
     image.onerror = () => {
-      image.hidden = true;
+      imageWrap.hidden = true;
       showPreviewTools(false);
       unsupported.hidden = false;
       unsupported.textContent = 'This image could not be previewed. Upload a PNG or JPEG.';
     };
     image.onload = () => syncPreviewCursor();
     image.src = previewUrl;
-    image.hidden = false;
+    imageWrap.hidden = false;
     applyPreviewZoom();
   }
 
@@ -606,6 +611,7 @@
     }
     if (generation !== previewGeneration) return;
     previewPdf = documentPdf;
+    previewTextPages = [];
     pages.replaceChildren();
     applyPreviewZoom();
     const count = documentPdf.numPages;
@@ -615,17 +621,155 @@
       const page = await documentPdf.getPage(number);
       const unscaled = page.getViewport({ scale: 1 });
       const viewport = page.getViewport({ scale: width / unscaled.width });
+      const wrap = document.createElement('div');
+      wrap.className = 'preview-page';
+      wrap.dataset.page = String(number);
       const canvas = document.createElement('canvas');
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
       canvas.setAttribute('aria-label', `Invoice page ${number} of ${count}`);
-      pages.appendChild(canvas);
+      const marks = document.createElement('div');
+      marks.className = 'preview-highlights';
+      wrap.append(canvas, marks);
+      pages.appendChild(wrap);
       const context = canvas.getContext('2d');
       context.fillStyle = '#ffffff';
       context.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: context, viewport }).promise;
+      const content = await page.getTextContent();
+      previewTextPages.push({
+        page: number,
+        items: (content.items || []).map(item => textItemBox(item, viewport, canvas.width, canvas.height)).filter(Boolean)
+      });
     }
     if (generation === previewGeneration) syncPreviewCursor();
+  }
+
+  function textItemBox(item, viewport, canvasWidth, canvasHeight) {
+    const text = String((item && item.str) || '');
+    if (!text.trim()) return null;
+    const matrix = item.transform || [1, 0, 0, 1, 0, 0];
+    const transform = window.pdfjsLib && window.pdfjsLib.Util && window.pdfjsLib.Util.transform
+      ? window.pdfjsLib.Util.transform(viewport.transform, matrix)
+      : [
+        viewport.transform[0] * matrix[0] + viewport.transform[2] * matrix[1],
+        viewport.transform[1] * matrix[0] + viewport.transform[3] * matrix[1],
+        viewport.transform[0] * matrix[2] + viewport.transform[2] * matrix[3],
+        viewport.transform[1] * matrix[2] + viewport.transform[3] * matrix[3],
+        viewport.transform[0] * matrix[4] + viewport.transform[2] * matrix[5] + viewport.transform[4],
+        viewport.transform[1] * matrix[4] + viewport.transform[3] * matrix[5] + viewport.transform[5]
+      ];
+    const height = Math.hypot(transform[2], transform[3]) || (item.height || 8) * (viewport.scale || 1);
+    const width = (item.width || 0) * (viewport.scale || 1) || Math.max(4, text.length * height * 0.5);
+    const left = transform[4];
+    const top = transform[5] - height;
+    if (!canvasWidth || !canvasHeight) return { str: text, left: 0, top: 0, width: 0, height: 0 };
+    return {
+      str: text,
+      left: left / canvasWidth,
+      top: top / canvasHeight,
+      width: width / canvasWidth,
+      height: height / canvasHeight
+    };
+  }
+
+  function locateApi() {
+    return window.invoiceLocate || {};
+  }
+
+  function setFindNote(text) {
+    const note = document.getElementById('preview-find');
+    if (!text) {
+      note.hidden = true;
+      note.textContent = '';
+      return;
+    }
+    note.hidden = false;
+    note.textContent = text;
+  }
+
+  function clearHighlights() {
+    document.querySelectorAll('.preview-highlight').forEach(node => node.remove());
+    document.querySelectorAll('.is-located').forEach(node => node.classList.remove('is-located'));
+    setFindNote('');
+  }
+
+  function highlightHost(hit) {
+    const page = document.querySelector(`.preview-page[data-page="${hit && hit.page}"]`);
+    if (page && !page.hasAttribute('hidden') && !page.closest('[hidden]')) return page;
+    const imageWrap = document.getElementById('preview-image-wrap');
+    if (imageWrap && !imageWrap.hidden) return imageWrap;
+    return null;
+  }
+
+  function paintHighlights(hits) {
+    document.querySelectorAll('.preview-highlight').forEach(node => node.remove());
+    (hits || []).forEach((hit, index) => {
+      const page = highlightHost(hit);
+      if (!page) return;
+      const layer = page.querySelector('.preview-highlights');
+      if (!layer) return;
+      const mark = document.createElement('span');
+      mark.className = 'preview-highlight';
+      if (index === 0) mark.classList.add('is-active');
+      mark.style.left = `${hit.left * 100}%`;
+      mark.style.top = `${hit.top * 100}%`;
+      mark.style.width = `${Math.max(1.2, hit.width * 100)}%`;
+      mark.style.height = `${Math.max(1.4, hit.height * 100)}%`;
+      layer.appendChild(mark);
+    });
+    const first = document.querySelector('.preview-highlight');
+    if (first) first.scrollIntoView({ block: 'center', inline: 'nearest' });
+  }
+
+  function bindLocate(node, field, optionsFactory) {
+    node.classList.add('has-value');
+    node.tabIndex = 0;
+    node.title = 'Highlight this value on the invoice';
+    const activate = () => locateField(field, node, optionsFactory ? optionsFactory() : {});
+    node.addEventListener('click', activate);
+    node.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activate();
+      }
+    });
+  }
+
+  function locateField(field, origin, options = {}) {
+    if (!field || field.value === '' || field.value == null) return;
+    document.querySelectorAll('.is-located').forEach(node => node.classList.remove('is-located'));
+    if (origin) origin.classList.add('is-located');
+    const pagesEl = document.getElementById('preview-pages');
+    const imageWrap = document.getElementById('preview-image-wrap');
+    if (pagesEl.hidden && imageWrap.hidden) {
+      setFindNote('Upload a PDF or image to highlight this value on the invoice.');
+      return;
+    }
+    if (!pagesEl.hidden && !previewTextPages.length) {
+      setFindNote('The invoice is still opening. Click the field again in a moment.');
+      return;
+    }
+    const locate = locateApi();
+    let hits = [];
+    if (field.box && Number.isFinite(field.box.left)) hits = [field.box];
+    if (!hits.length && typeof locate.findHits === 'function') {
+      hits = locate.findHits(previewTextPages, field, options);
+    }
+    if (!hits.length) {
+      document.querySelectorAll('.preview-highlight').forEach(node => node.remove());
+      if (!imageWrap.hidden && pagesEl.hidden) {
+        setFindNote('This image has no searchable text. Document AI field boxes still highlight when they are returned.');
+      } else {
+        setFindNote('That value was not found on the PDF text layer.');
+      }
+      return;
+    }
+    paintHighlights(hits);
+    const page = hits[0].page || 1;
+    setFindNote(hits.length === 1
+      ? `Highlighted on page ${page}.`
+      : `Highlighted ${hits.length} matches, first on page ${page}.`);
   }
 
   async function extract(mode) {
@@ -741,7 +885,9 @@
       title.textContent = `Line ${line.index}`;
       const table = document.createElement('table');
       const body = document.createElement('tbody');
-      line.fields.filter(field => field.state !== 'empty').forEach(field => body.appendChild(compareRow(field)));
+      line.fields.filter(field => field.state !== 'empty').forEach(field => {
+        body.appendChild(compareRow(field, { occurrence: Math.max(0, line.index - 1) }));
+      });
       if (!body.childNodes.length) {
         const row = document.createElement('tr');
         const cell = document.createElement('td');
@@ -810,13 +956,26 @@
     return node;
   }
 
-  function compareRow(field) {
+  function compareRow(field, options = {}) {
     const row = document.createElement('tr');
     row.className = field.state;
     const name = document.createElement('th');
     name.scope = 'row';
     name.textContent = field.label || field.name;
     row.append(name, compareCell(field.documentAi), compareCell(field.aiCore));
+    const side = (field.aiCore && field.aiCore.value !== '' && field.aiCore.value != null)
+      ? field.aiCore
+      : field.documentAi;
+    if (side && side.value !== '' && side.value != null) {
+      const target = {
+        name: field.name,
+        label: field.label,
+        type: field.type,
+        value: side.value,
+        box: (field.documentAi && field.documentAi.box) || side.box
+      };
+      bindLocate(row, target, () => options);
+    }
     return row;
   }
 
@@ -972,6 +1131,7 @@
       const value = document.createElement('strong');
       value.textContent = formatValue(field);
       card.append(caption, value);
+      if (field.value !== '' && field.value != null) bindLocate(card, field);
       return card;
     }).filter(Boolean);
     shown.forEach(card => host.appendChild(card));
@@ -1017,6 +1177,7 @@
       const score = document.createElement('td');
       score.appendChild(confidenceNode(field.confidence));
       row.append(name, value, score);
+      if (field.value !== '' && field.value != null) bindLocate(row, field);
       tbody.appendChild(row);
     });
     document.getElementById('header-count').textContent = String(shown);
@@ -1057,6 +1218,8 @@
       fields.className = 'line-fields';
       columns.forEach(column => {
         const field = byName.get(column.name) || column;
+        const row = document.createElement('div');
+        row.className = 'line-field';
         const term = document.createElement('dt');
         term.textContent = column.label || column.name;
         const value = document.createElement('dd');
@@ -1065,7 +1228,20 @@
         const score = document.createElement('dd');
         score.className = 'line-score';
         score.appendChild(confidenceNode(field && field.confidence));
-        fields.append(term, value, score);
+        row.append(term, value, score);
+        if (field && field.value !== '' && field.value != null) {
+          bindLocate(row, field, () => {
+            const description = byName.get('description');
+            const nearHits = description && window.invoiceLocate
+              ? window.invoiceLocate.findHits(previewTextPages, description, { limit: 1 })
+              : [];
+            return {
+              near: nearHits[0] || (description && description.box),
+              occurrence: index
+            };
+          });
+        }
+        fields.appendChild(row);
       });
       card.append(title, fields);
       list.appendChild(card);

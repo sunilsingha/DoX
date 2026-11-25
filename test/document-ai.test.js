@@ -74,7 +74,7 @@ const merged = mergeExtraction(schema, {
   status: 'DONE',
   extraction: {
     headerFields: [
-      { name: 'invoiceNumber', value: 'INV-9', confidence: 0.95 },
+      { name: 'invoiceNumber', value: 'INV-9', confidence: 0.95, page: 1, coordinates: [{ x: 0.1, y: 0.1 }, { x: 0.3, y: 0.1 }, { x: 0.3, y: 0.2 }, { x: 0.1, y: 0.2 }] },
       { name: 'extraNote', value: 'rush' }
     ],
     lineItems: [[
@@ -84,6 +84,20 @@ const merged = mergeExtraction(schema, {
   }
 });
 assert.strictEqual(merged.header.find(field => field.name === 'invoiceNumber').value, 'INV-9');
+assert.strictEqual(merged.header.find(field => field.name === 'invoiceNumber').box.page, 1);
+assert.strictEqual(merged.header.find(field => field.name === 'invoiceNumber').box.left, 0.1);
+
+const boxed = mergeExtraction(schema, {
+  extraction: {
+    headerFields: [
+      { name: 'invoiceNumber', value: 'INV-2', boundingBox: { left: 0.2, top: 0.3, width: 0.15, height: 0.04 }, page: 2 }
+    ],
+    lineItems: []
+  }
+});
+assert.strictEqual(boxed.header.find(field => field.name === 'invoiceNumber').box.page, 2);
+assert.strictEqual(boxed.header.find(field => field.name === 'invoiceNumber').box.left, 0.2);
+assert.ok(Math.abs(boxed.header.find(field => field.name === 'invoiceNumber').box.height - 0.04) < 1e-9);
 assert.ok(merged.header.some(field => field.name === 'extraNote'));
 assert.strictEqual(merged.lineItems[0].find(cell => cell.name === 'quantity').value, '3');
 assert.strictEqual(merged.lineItems[0].find(cell => cell.name === 'description').value, 'Bearing');

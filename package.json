@@ -22,7 +22,7 @@
   },
   "scripts": {
     "start": "cds run",
-    "test": "node test/document-ai.test.js && node test/ai-core.test.js && node test/compare.test.js"
+    "test": "node test/document-ai.test.js && node test/ai-core.test.js && node test/compare.test.js && node test/locate.test.js"
   },
   "eslintConfig": {
     "extends": "eslint:recommended",

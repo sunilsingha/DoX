@@ -114,6 +114,7 @@
           <div>
             <h2 id="preview-title">Invoice</h2>
             <p class="panel-sub" id="preview-meta">No file selected.</p>
+            <p class="panel-sub" id="preview-find" hidden></p>
           </div>
           <div class="preview-tools" id="preview-tools" hidden>
             <button type="button" class="btn icon-btn" id="preview-zoom-out" aria-label="Zoom out">−</button>
@@ -125,7 +126,10 @@
         <div class="preview-frame" id="preview-frame">
           <p class="preview-empty" id="preview-empty">The uploaded invoice stays here, beside the extracted fields.</p>
           <div id="preview-pages" class="preview-pages" hidden></div>
-          <img id="preview-image" alt="" hidden />
+          <div id="preview-image-wrap" class="preview-page preview-image-wrap" data-page="1" hidden>
+            <img id="preview-image" alt="" />
+            <div class="preview-highlights"></div>
+          </div>
           <p class="preview-empty" id="preview-unsupported" hidden></p>
         </div>
       </aside>
@@ -148,7 +152,7 @@
           <div class="panel-head">
             <div>
               <h2 id="header-title">Header</h2>
-              <p class="panel-sub"><span id="header-count">0</span> fields · confidence is the model score from 0 to 1</p>
+              <p class="panel-sub"><span id="header-count">0</span> fields · click a value to highlight it on the invoice</p>
             </div>
             <label class="search">
               <span class="sr-only">Find a header field</span>
@@ -181,7 +185,7 @@
           <div class="panel-head">
             <div>
               <h2 id="lines-title">Line items</h2>
-              <p class="panel-sub"><span id="line-count">0</span> rows</p>
+              <p class="panel-sub"><span id="line-count">0</span> rows · click a value to highlight it on the invoice</p>
             </div>
           </div>
           <div class="lines-scroll" id="lines-scroll">
@@ -270,6 +274,7 @@ Authorization: Bearer &lt;token&gt;</pre>
   </dialog>
 
   <script src="/vendor/pdfjs/pdf.min.js"></script>
+  <script src="locate.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

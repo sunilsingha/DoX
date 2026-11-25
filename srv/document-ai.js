@@ -206,11 +206,13 @@ function compareFields(leftFields, rightFields) {
       label: documentField.label || coreField.label || name,
       documentAi: {
         value: documentField.value == null ? '' : documentField.value,
-        confidence: documentField.confidence == null ? null : documentField.confidence
+        confidence: documentField.confidence == null ? null : documentField.confidence,
+        box: documentField.box || null
       },
       aiCore: {
         value: coreField.value == null ? '' : coreField.value,
-        confidence: coreField.confidence == null ? null : coreField.confidence
+        confidence: coreField.confidence == null ? null : coreField.confidence,
+        box: coreField.box || null
       },
       state: compareState(documentField.value, coreField.value)
     };
@@ -478,8 +480,8 @@ function placeholderFor(field, rowIndex) {
   return `${field.label || field.name} ${rowIndex + 1}`;
 }
 
-function presentField(field, value, confidence) {
-  return {
+function presentField(field, value, confidence, box) {
+  const cell = {
     name: field.name,
     label: field.label,
     description: field.description,
@@ -489,6 +491,8 @@ function presentField(field, value, confidence) {
     value: value == null ? '' : value,
     confidence: confidence == null ? null : confidence
   };
+  if (box) cell.box = box;
+  return cell;
 }
 
 function buildSampleResult(schema, file) {
@@ -546,16 +550,78 @@ function buildOptions({ schema, doxClient, template, schemaName, schemaVersion, 
   return options;
 }
 
+function geometryPage(source) {
+  const page = Number(source && (source.page || source.pageNumber));
+  return Number.isFinite(page) && page > 0 ? page : 1;
+}
+
+function boxFromObject(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+  const left = Number(source.left ?? source.x ?? source.xmin ?? source.xMin);
+  const top = Number(source.top ?? source.y ?? source.ymin ?? source.yMin);
+  const width = Number(source.width);
+  const height = Number(source.height);
+  const right = Number(source.right ?? source.xmax ?? source.xMax);
+  const bottom = Number(source.bottom ?? source.ymax ?? source.yMax);
+  if (Number.isFinite(left) && Number.isFinite(top) && Number.isFinite(width) && Number.isFinite(height)) {
+    return { page: geometryPage(source), left, top, width: Math.max(0.004, width), height: Math.max(0.004, height) };
+  }
+  if (Number.isFinite(left) && Number.isFinite(top) && Number.isFinite(right) && Number.isFinite(bottom)) {
+    return {
+      page: geometryPage(source),
+      left,
+      top,
+      width: Math.max(0.004, right - left),
+      height: Math.max(0.004, bottom - top)
+    };
+  }
+  return null;
+}
+
+function readGeometry(field) {
+  if (!field || typeof field !== 'object') return null;
+  const source = field.value && typeof field.value === 'object' && !Array.isArray(field.value)
+    ? { ...field, ...field.value }
+    : field;
+  const coordinates = source.coordinates || source.boundingBox || source.bbox || source.box;
+  const fromObject = boxFromObject(coordinates) || boxFromObject(source);
+  if (fromObject && Number.isFinite(fromObject.left)) {
+    return { ...fromObject, page: geometryPage({ ...fromObject, ...source }) };
+  }
+  const points = Array.isArray(coordinates) ? coordinates : [];
+  const xs = points.map(point => Number(point && (Array.isArray(point) ? point[0] : point.x))).filter(Number.isFinite);
+  const ys = points.map(point => Number(point && (Array.isArray(point) ? point[1] : point.y))).filter(Number.isFinite);
+  if (xs.length >= 2 && ys.length >= 2) {
+    const left = Math.min(...xs);
+    const top = Math.min(...ys);
+    return {
+      page: geometryPage(source),
+      left,
+      top,
+      width: Math.max(0.004, Math.max(...xs) - left),
+      height: Math.max(0.004, Math.max(...ys) - top)
+    };
+  }
+  return Number.isFinite(Number(source.page || source.pageNumber)) && Number(source.page || source.pageNumber) > 0
+    ? { page: geometryPage(source) }
+    : null;
+}
+
 function readPrediction(field) {
   if (!field || typeof field !== 'object') return { value: '', confidence: null };
+  const box = readGeometry(field);
   if (Array.isArray(field.values) && field.values.length) {
     const best = [...field.values].sort((left, right) => (right.confidence || 0) - (left.confidence || 0))[0];
-    return { value: best.value ?? '', confidence: best.confidence ?? null };
+    return { value: best.value ?? '', confidence: best.confidence ?? null, box: readGeometry(best) || box };
   }
   if (field.value && typeof field.value === 'object') {
-    return { value: field.value.value ?? '', confidence: field.value.confidence ?? field.confidence ?? null };
+    return {
+      value: field.value.value ?? '',
+      confidence: field.value.confidence ?? field.confidence ?? null,
+      box
+    };
   }
-  return { value: field.value ?? field.rawValue ?? '', confidence: field.confidence ?? null };
+  return { value: field.value ?? field.rawValue ?? '', confidence: field.confidence ?? null, box };
 }
 
 function indexPredictions(fields) {
@@ -591,10 +657,10 @@ function mergeExtraction(schema, payload) {
   const header = schema.headerFields.map(field => {
     const prediction = headerPredictions.get(field.name) || { value: '', confidence: null };
     headerPredictions.delete(field.name);
-    return presentField(field, prediction.value, prediction.confidence);
+    return presentField(field, prediction.value, prediction.confidence, prediction.box);
   });
   for (const [name, prediction] of headerPredictions) {
-    header.push(presentField({ name, label: humanize(name), type: 'string' }, prediction.value, prediction.confidence));
+    header.push(presentField({ name, label: humanize(name), type: 'string' }, prediction.value, prediction.confidence, prediction.box));
   }
 
   const rows = lineItemRows(extraction.lineItems);
@@ -603,10 +669,10 @@ function mergeExtraction(schema, payload) {
     const cells = schema.lineItemFields.map(field => {
       const prediction = predictions.get(field.name) || { value: '', confidence: null };
       predictions.delete(field.name);
-      return presentField(field, prediction.value, prediction.confidence);
+      return presentField(field, prediction.value, prediction.confidence, prediction.box);
     });
     for (const [name, prediction] of predictions) {
-      cells.push(presentField({ name, label: humanize(name), type: 'string' }, prediction.value, prediction.confidence));
+      cells.push(presentField({ name, label: humanize(name), type: 'string' }, prediction.value, prediction.confidence, prediction.box));
     }
     return cells;
   });
