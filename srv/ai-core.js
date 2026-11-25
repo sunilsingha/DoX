@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const axios = require('axios');
-const { inputModeFrom, ocrDocument, ensureCanvasDom } = require('./ocr');
+const { inputModeFrom, ocrDocument, ensureCanvasDom, rasterizePdfPage } = require('./ocr');
 
 const IMAGE_TYPES = {
   '.png': 'image/png',
@@ -353,7 +353,7 @@ function planPdfJobs(pages, pageCount) {
     if (pageHasText(page)) run.push(page);
     else {
       flush();
-      jobs.push({ kind: 'file', pages: [number] });
+      jobs.push({ kind: 'image', pages: [number] });
     }
   }
   flush();
@@ -383,7 +383,9 @@ function textCoversDocument(pages, pageCount) {
 function sentAsFromJobs(jobs) {
   const kinds = new Set((jobs || []).map(job => job.kind));
   if (kinds.size === 1 && kinds.has('text')) return 'pdf-text';
-  if (kinds.has('text') && kinds.has('file')) return 'pdf-mixed';
+  if (kinds.size === 1 && kinds.has('image')) return 'image';
+  if (kinds.has('text') && (kinds.has('file') || kinds.has('image'))) return 'pdf-mixed';
+  if (kinds.has('file')) return 'pdf-file';
   return 'pdf-file';
 }
 
@@ -401,7 +403,7 @@ async function pdfjsPages(buffer) {
   }
   const fontDir = path.join(path.dirname(require.resolve('pdfjs-dist/package.json')), 'standard_fonts');
   const document = await pdfjs.getDocument({
-    data: new Uint8Array(buffer),
+    data: Uint8Array.from(Buffer.from(buffer)),
     disableWorker: true,
     isEvalSupported: false,
     disableFontFace: true,
@@ -1558,7 +1560,7 @@ async function extractPdf(context, buffer, responses) {
   const covered = textCoversDocument(pages, pageCount);
   const jobs = covered
     ? planPdfJobs(pages, pageCount)
-    : Array.from({ length: pageCount }, (_, index) => ({ kind: 'file', pages: [index + 1] }));
+    : Array.from({ length: pageCount }, (_, index) => ({ kind: 'image', pages: [index + 1] }));
   if (!jobs.length) {
     throw new AiCoreError('The PDF has no pages to extract.', 400);
   }
@@ -1566,6 +1568,18 @@ async function extractPdf(context, buffer, responses) {
     const scope = { pages: job.pages, pageCount };
     if (job.kind === 'text') {
       return extractPrepared(context, { kind: 'text', text: job.text }, scope, responses);
+    }
+    if (job.kind === 'image') {
+      try {
+        const png = await rasterizePdfPage(buffer, job.pages[0]);
+        return extractPrepared(context, {
+          kind: 'image',
+          mediaType: 'image/png',
+          base64: png.toString('base64')
+        }, scope, responses);
+      } catch (error) {
+        // Fall back to the PDF page if rasterization fails.
+      }
     }
     const slice = pageCount > 1 ? await slicePdf(buffer, job.pages[0]) : buffer;
     const page = pages.find(item => item.number === job.pages[0]);

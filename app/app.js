@@ -929,7 +929,9 @@
     checkJob.textContent = 'Check Document AI status';
     if (readCompare) {
       if (result.ocr && result.ocr.ok === false) errors.appendChild(errorStrip(`PaddleOCR: ${result.ocr.error}`));
+      else if (result.ocr && !hasValues(result.ocr)) errors.appendChild(errorStrip('PaddleOCR returned no fields.'));
       if (result.vision && result.vision.ok === false) errors.appendChild(errorStrip(`Vision LLM: ${result.vision.error}`));
+      else if (result.vision && !hasValues(result.vision)) errors.appendChild(errorStrip('Vision LLM returned no fields.'));
     } else {
       if (result.documentAi && result.documentAi.ok === false && !documentPending) errors.appendChild(errorStrip(`Document AI: ${result.documentAi.error}`));
       if (result.aiCore && result.aiCore.ok === false) errors.appendChild(errorStrip(`AI Core: ${result.aiCore.error}`));
@@ -1258,7 +1260,7 @@
         : 'PaddleOCR read the pages locally. Token counts come from the selected model on that text. On a digital PDF this is not cheaper than Vision, because Vision also sends text.';
     }
     if (sentAs === 'image' || sentAs === 'pdf-file') {
-      return 'The model was charged for page images. PaddleOCR then LLM would send text instead and usually uses fewer input tokens on a scan.';
+      return 'The model was charged for page images. Scans are sent as images, not as the original PDF file.';
     }
     if (sentAs === 'pdf-mixed') {
       return 'Some pages were sent as text and some as PDF images. Token savings from PaddleOCR show up on the scanned pages.';

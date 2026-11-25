@@ -1061,7 +1061,7 @@ async function extractWithDocumentAi(file, schema, body) {
 
 async function extractWithAiCore(file, schema, body) {
   const live = await aiCore.extractDocument({
-    buffer: file.buffer,
+    buffer: Buffer.from(file.buffer),
     filename: file.originalname,
     schema,
     resourceGroup: body.resourceGroup,

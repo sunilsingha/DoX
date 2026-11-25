@@ -3,7 +3,7 @@
 const assert = require('assert');
 const { PDFDocument } = require('pdf-lib');
 const sharp = require('sharp');
-const { inputModeFrom, linesFromOcr, joinPageTexts, ocrDocument, setCreateEngine, pdfPagePngs, publicOcrError, pngFromRgba, resizeRgba } = require('../srv/ocr');
+const { inputModeFrom, linesFromOcr, joinPageTexts, ocrDocument, setCreateEngine, pdfPagePngs, publicOcrError, pngFromRgba, rasterizePdfPage, resizeRgba } = require('../srv/ocr');
 
 assert.strictEqual(inputModeFrom('ocr'), 'ocr');
 assert.strictEqual(inputModeFrom('PaddleOCR'), 'ocr');
@@ -125,6 +125,8 @@ setCreateEngine(async () => ({
   const scanned = Buffer.from(await imagePdf.save());
   const extracted = await pdfPagePngs(scanned);
   assert.ok(extracted.length >= 1, 'expected an embedded page image');
+  const raster = await rasterizePdfPage(scanned, 1);
+  assert.strictEqual(raster[0], 0x89);
   const meta = await sharp(extracted[0]).metadata();
   assert.ok(meta.width >= 80, meta.width);
   assert.ok(meta.height >= 80, meta.height);

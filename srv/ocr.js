@@ -339,7 +339,7 @@ async function loadPdf(buffer) {
   const root = path.dirname(require.resolve('pdfjs-dist/package.json'));
   const canvasFactory = new NodeCanvasFactory();
   return pdfjs.getDocument({
-    data: new Uint8Array(buffer),
+    data: Uint8Array.from(Buffer.from(buffer)),
     disableWorker: true,
     isEvalSupported: false,
     disableFontFace: true,
@@ -540,6 +540,12 @@ function publicOcrError(detail) {
   return `PaddleOCR did not read any text from this PDF. ${text} Try Vision LLM.`;
 }
 
+async function rasterizePdfPage(buffer, pageNumber) {
+  const document = await loadPdf(buffer);
+  const rgba = await renderPdfPage(document, pageNumber);
+  return pngFromRgba(rgba.data, rgba.width, rgba.height);
+}
+
 async function ocrDocument({ buffer, filename }) {
   if (!buffer || !buffer.length) throw new OcrError('Choose an invoice file first.', 400);
   const kind = kindFrom(buffer, filename);
@@ -567,5 +573,6 @@ module.exports = {
   pdfPagePngs,
   pngFromRgba,
   publicOcrError,
+  rasterizePdfPage,
   resizeRgba
 };

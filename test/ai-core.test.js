@@ -276,7 +276,9 @@ assert.strictEqual(ocrUsage.promptTokens, 2500);
 assert.strictEqual(ocrUsage.sentAs, 'ocr-text');
 assert.strictEqual(sentAsFromJobs([{ kind: 'text' }]), 'pdf-text');
 assert.strictEqual(sentAsFromJobs([{ kind: 'file' }]), 'pdf-file');
+assert.strictEqual(sentAsFromJobs([{ kind: 'image' }]), 'image');
 assert.strictEqual(sentAsFromJobs([{ kind: 'text' }, { kind: 'file' }]), 'pdf-mixed');
+assert.strictEqual(sentAsFromJobs([{ kind: 'text' }, { kind: 'image' }]), 'pdf-mixed');
 const visionText = combineUsage([openaiUsage], { modelName: 'gpt-4o-mini', inputMode: 'vision', sentAs: 'pdf-text' });
 assert.strictEqual(visionText.sentAs, 'pdf-text');
 assert.strictEqual(visionText.inputMode, 'vision');
@@ -311,7 +313,7 @@ const planned = planPdfJobs([
 ], 2);
 assert.strictEqual(planned[0].kind, 'text');
 assert.deepStrictEqual(planned[0].pages, [1]);
-assert.strictEqual(planned[1].kind, 'file');
+assert.strictEqual(planned[1].kind, 'image');
 assert.deepStrictEqual(planned[1].pages, [2]);
 const mergedLines = mergeExtractions([
   {
