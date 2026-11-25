@@ -1,1 +1,14 @@
-{}
+{
+  "requires": {
+    "db": {
+      "[development]": {
+        "kind": "sqlite",
+        "credentials": { "database": ":memory:" }
+      },
+      "[production]": {
+        "kind": "sqlite",
+        "credentials": { "database": ":memory:" }
+      }
+    }
+  }
+}

@@ -5,20 +5,27 @@
   "repository": "<Add your repository here>",
   "license": "UNLICENSED",
   "private": true,
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "@gutenye/ocr-node": "^1.4.9",
+    "@napi-rs/canvas": "^1.2.1",
     "@sap/cds": "^5",
     "axios": "^1.7.2",
     "express": "^4",
     "form-data": "^4.0.0",
     "multer": "^1.4.5-lts.1",
-    "pdfjs-dist": "^3.11.174"
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^3.11.174",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "sqlite3": "^6.0.1"
   },
   "scripts": {
     "start": "cds run",
-    "test": "node test/document-ai.test.js && node test/ai-core.test.js && node test/compare.test.js"
+    "test": "node test/document-ai.test.js && node test/ai-core.test.js && node test/compare.test.js && node test/locate.test.js && node test/ocr.test.js"
   },
   "eslintConfig": {
     "extends": "eslint:recommended",

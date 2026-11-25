@@ -10,6 +10,8 @@
   "AICORE_CLIENT_SECRET": "<clientsecret from the SAP AI Core service key>",
   "AICORE_BASE_URL": "https://api.ai.<landscape>.<region>.aws.ml.hana.ondemand.com",
   "AICORE_RESOURCE_GROUP": "default",
-  "AICORE_DEPLOYMENT_ID": "<deployment id of the running foundation model>",
+  "AICORE_DEPLOYMENT_ID": "<deployment id of the running GPT model>",
+  "AICORE_GEMINI_DEPLOYMENT_ID": "<deployment id of the running Gemini chat model>",
+  "AICORE_GEMINI_MODEL": "gemini-2.5-flash",
   "AICORE_API_VERSION": "2023-05-15"
 }
