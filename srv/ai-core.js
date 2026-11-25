@@ -380,6 +380,13 @@ function textCoversDocument(pages, pageCount) {
   return usable.length >= Math.ceil(count / 2) && chars >= count * 80;
 }
 
+function sentAsFromJobs(jobs) {
+  const kinds = new Set((jobs || []).map(job => job.kind));
+  if (kinds.size === 1 && kinds.has('text')) return 'pdf-text';
+  if (kinds.has('text') && kinds.has('file')) return 'pdf-mixed';
+  return 'pdf-file';
+}
+
 async function pdfjsPages(buffer) {
   let pdfjs;
   const log = console.log;
@@ -577,6 +584,7 @@ function combineUsage(parts, context) {
     resourceGroup: extra.resourceGroup || '',
     executableId: extra.executableId || '',
     inputMode: extra.inputMode || 'vision',
+    sentAs: extra.sentAs || (extra.inputMode === 'ocr' ? 'ocr-text' : ''),
     ocrEngine: extra.ocrEngine || '',
     ocrModel: extra.ocrModel || '',
     ocrPages: extra.ocrPages != null ? extra.ocrPages : null,
@@ -1545,7 +1553,7 @@ async function extractPdf(context, buffer, responses) {
       filename: 'invoice.pdf',
       base64: buffer.toString('base64')
     }, { pages: [1], pageCount: 1 }, responses);
-    return { merged, pageCount: 1 };
+    return { merged, pageCount: 1, sentAs: 'pdf-file' };
   }
   const covered = textCoversDocument(pages, pageCount);
   const jobs = covered
@@ -1568,7 +1576,7 @@ async function extractPdf(context, buffer, responses) {
       text: page && page.text
     }, { ...scope, fallbackText: page && page.text }, responses);
   });
-  return { merged: mergeExtractions(parts), pageCount };
+  return { merged: mergeExtractions(parts), pageCount, sentAs: sentAsFromJobs(jobs) };
 }
 
 async function extractOcr(context, ocr, responses) {
@@ -1581,7 +1589,7 @@ async function extractOcr(context, ocr, responses) {
       pageCount: ocr.pageCount || pages.length || 1
     }, responses);
   });
-  return { merged: mergeExtractions(parts), pageCount: ocr.pageCount || pages.length || 1 };
+  return { merged: mergeExtractions(parts), pageCount: ocr.pageCount || pages.length || 1, sentAs: 'ocr-text' };
 }
 
 async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId, modelName, executableId, inputMode }) {
@@ -1629,7 +1637,7 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   } else {
     outcome = prepared.kind === 'pdf'
       ? await extractPdf(context, buffer, responses)
-      : { merged: await extractPrepared(context, prepared, null, responses), pageCount: 0 };
+      : { merged: await extractPrepared(context, prepared, null, responses), pageCount: 0, sentAs: 'image' };
   }
   return {
     ...outcome.merged,
@@ -1643,6 +1651,7 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
       resourceGroup: inferenceGroup,
       executableId: resolved.executableId || '',
       inputMode: readAs,
+      sentAs: outcome.sentAs || (readAs === 'ocr' ? 'ocr-text' : ''),
       ocrEngine: ocrMeta && ocrMeta.engine,
       ocrModel: ocrMeta && ocrMeta.model,
       ocrPages: ocrMeta && ocrMeta.pages
@@ -1696,5 +1705,6 @@ module.exports = {
   readUsage,
   combineUsage,
   inputModeFrom,
+  sentAsFromJobs,
   listChatModels
 };

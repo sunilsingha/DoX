@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, executableFor, geminiPayload, anthropicPayload, conversePayload, anthropicUrl, converseUrl, inferenceUrl, messageText, readUsage, combineUsage, inputModeFrom, linesFromItems, groupPages, planPdfJobs, textCoversDocument, mergeExtractions, salvageModelContent, extractionEmpty, shouldRetryAsText } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, executableFor, geminiPayload, anthropicPayload, conversePayload, anthropicUrl, converseUrl, inferenceUrl, messageText, readUsage, combineUsage, inputModeFrom, sentAsFromJobs, linesFromItems, groupPages, planPdfJobs, textCoversDocument, mergeExtractions, salvageModelContent, extractionEmpty, shouldRetryAsText } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -273,6 +273,13 @@ assert.strictEqual(ocrUsage.inputMode, 'ocr');
 assert.strictEqual(ocrUsage.ocrEngine, 'paddleocr');
 assert.strictEqual(ocrUsage.ocrPages, 2);
 assert.strictEqual(ocrUsage.promptTokens, 2500);
+assert.strictEqual(ocrUsage.sentAs, 'ocr-text');
+assert.strictEqual(sentAsFromJobs([{ kind: 'text' }]), 'pdf-text');
+assert.strictEqual(sentAsFromJobs([{ kind: 'file' }]), 'pdf-file');
+assert.strictEqual(sentAsFromJobs([{ kind: 'text' }, { kind: 'file' }]), 'pdf-mixed');
+const visionText = combineUsage([openaiUsage], { modelName: 'gpt-4o-mini', inputMode: 'vision', sentAs: 'pdf-text' });
+assert.strictEqual(visionText.sentAs, 'pdf-text');
+assert.strictEqual(visionText.inputMode, 'vision');
 
 const miniPayload = chatPayload('gpt-4o-mini', 'extract');
 assert.strictEqual(miniPayload.temperature, 0);

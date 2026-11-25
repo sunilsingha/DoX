@@ -89,9 +89,9 @@ Use Test connection before the first invoice. A success message means the servic
 4. Choose **Read with**: **PaddleOCR then LLM** or **Vision LLM**. Document AI ignores this choice.
 5. Press Extract invoice.
 
-**Vision LLM** is the previous path: a PDF or image is sent to the selected model with the field list. If that deployment refuses a PDF attachment, the app reads the text from the file and sends the text instead. TIFF is not accepted on this path.
+**Vision LLM** is the previous path. A scan or photo is sent as images. A digital PDF that already has a text layer is sent as that text, not as page images, so token counts stay close to PaddleOCR on the same file. If that deployment refuses a PDF attachment, the app reads the text from the file and sends the text instead. TIFF is not accepted on this path.
 
-**PaddleOCR then LLM** rasterizes each PDF page (or the uploaded image), runs PaddleOCR PP-OCRv4 locally through ONNX, then sends that text to the same selected model to fill the schema. Token counts on the usage panel are from the model, not from OCR. A scan or a TIFF can use this path. Cloud Foundry memory is 1024M so ONNX and page rendering fit.
+**PaddleOCR then LLM** rasterizes each PDF page (or the uploaded image), runs PaddleOCR PP-OCRv4 locally through ONNX, then sends that text to the same selected model to fill the schema. Token counts on the usage panel are from the model, not from OCR. Savings show up on scans, where Vision would pay for page images. On a digital PDF both paths send text plus the same schema prompt, so the totals look alike. Cloud Foundry memory is 1024M so ONNX and page rendering fit.
 
 ## Compare Document AI and AI Core
 

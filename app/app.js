@@ -224,8 +224,8 @@
     }
     note.hidden = false;
     note.textContent = selectedInputMode() === 'ocr'
-      ? 'PaddleOCR reads the PDF or image, then the selected model writes the schema JSON. Token counts come from that model, not from OCR.'
-      : 'Vision LLM sends the PDF or image to the selected model. Token counts include the page images.';
+      ? 'PaddleOCR reads pixels, then the selected model writes the schema JSON. On a digital PDF this costs about the same as Vision. On a scan it is usually cheaper.'
+      : 'Scans and photos are sent as images. A digital PDF with a text layer is already sent as text, so tokens look like PaddleOCR.';
   }
 
   function syncSourceFields() {
@@ -1106,6 +1106,7 @@
     const ocr = usage.inputMode === 'ocr';
     const items = [
       ['Read with', ocr ? 'PaddleOCR then LLM' : 'Vision LLM'],
+      ['Sent to model', sentAsLabel(usage.sentAs, ocr)],
       ['OCR engine', ocr ? 'PaddleOCR' : ''],
       ['OCR model', ocr ? usage.ocrModel : ''],
       ['OCR pages', ocr && usage.ocrPages != null ? String(usage.ocrPages) : ''],
@@ -1126,17 +1127,39 @@
     (usage.completionDetails || []).forEach(item => items.push([`Completion ${String(item.modality).toLowerCase()}`, formatCount(item.tokens)]));
     if (usage.calls > 1) items.push(['AI Core calls', String(usage.calls)]);
     facts.replaceChildren(...items.filter(([, value]) => value !== '' && value != null).map(([label, value]) => usageFact(label, value)));
-    if (ocr) {
-      note.textContent = usage.calls > 1
-        ? 'PaddleOCR read the pages locally. Token counts are the sum of the selected model calls on that text.'
-        : 'PaddleOCR read the pages locally. Token counts come from the selected model on that text, not from OCR.';
-    } else {
-      note.textContent = usage.calls > 1
-        ? 'Counts are the sum of the AI Core calls for this extraction. Prompt tokens are the input. Completion tokens are the output.'
-        : 'Prompt tokens are the input. Completion tokens are the output. The counts come from the model response.';
-    }
+    note.textContent = usageNote(usage, ocr);
     panel.hidden = false;
     syncUsageToggle();
+  }
+
+  function sentAsLabel(sentAs, ocr) {
+    if (sentAs === 'ocr-text' || (ocr && !sentAs)) return 'PaddleOCR text';
+    if (sentAs === 'pdf-text') return 'PDF text layer';
+    if (sentAs === 'pdf-file') return 'PDF pages';
+    if (sentAs === 'pdf-mixed') return 'PDF text and pages';
+    if (sentAs === 'image') return 'Page image';
+    return '';
+  }
+
+  function usageNote(usage, ocr) {
+    const sentAs = usage.sentAs || (ocr ? 'ocr-text' : '');
+    if (sentAs === 'pdf-text') {
+      return 'This PDF already has a text layer. Vision LLM sent that text, not page images, so token counts stay close to PaddleOCR on the same file. Most of the input is the schema prompt plus the invoice wording.';
+    }
+    if (sentAs === 'ocr-text') {
+      return usage.calls > 1
+        ? 'PaddleOCR read the pages locally. Token counts are the sum of the selected model calls on that text. On a digital PDF this is not cheaper than Vision, because Vision also sends text.'
+        : 'PaddleOCR read the pages locally. Token counts come from the selected model on that text. On a digital PDF this is not cheaper than Vision, because Vision also sends text.';
+    }
+    if (sentAs === 'image' || sentAs === 'pdf-file') {
+      return 'The model was charged for page images. PaddleOCR then LLM would send text instead and usually uses fewer input tokens on a scan.';
+    }
+    if (sentAs === 'pdf-mixed') {
+      return 'Some pages were sent as text and some as PDF images. Token savings from PaddleOCR show up on the scanned pages.';
+    }
+    return usage.calls > 1
+      ? 'Counts are the sum of the AI Core calls for this extraction. Prompt tokens are the input. Completion tokens are the output.'
+      : 'Prompt tokens are the input. Completion tokens are the output. The counts come from the model response.';
   }
 
   function usageFact(label, value) {
