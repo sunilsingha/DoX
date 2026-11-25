@@ -3,7 +3,7 @@
 const assert = require('assert');
 const { PDFDocument } = require('pdf-lib');
 const sharp = require('sharp');
-const { inputModeFrom, linesFromOcr, joinPageTexts, ocrDocument, setCreateEngine, pdfPagePngs, publicOcrError } = require('../srv/ocr');
+const { inputModeFrom, linesFromOcr, joinPageTexts, ocrDocument, setCreateEngine, pdfPagePngs, publicOcrError, pngFromRgba, resizeRgba } = require('../srv/ocr');
 
 assert.strictEqual(inputModeFrom('ocr'), 'ocr');
 assert.strictEqual(inputModeFrom('PaddleOCR'), 'ocr');
@@ -108,6 +108,12 @@ setCreateEngine(async () => ({
 
   assert.ok(/scanned page/.test(publicOcrError('colourspace: parameter space not set')));
   assert.ok(/Try Vision LLM/.test(publicOcrError('')));
+  const encoded = pngFromRgba(Buffer.alloc(4, 255), 1, 1);
+  assert.strictEqual(encoded[0], 0x89);
+  assert.strictEqual(encoded[1], 0x50);
+  const line = await resizeRgba({ data: Buffer.alloc(40 * 10 * 4, 255), width: 40, height: 10 }, { height: 48 });
+  assert.strictEqual(line.height, 48);
+  assert.ok(line.width > 1);
 
   const pagePng = await sharp({
     create: { width: 120, height: 90, channels: 3, background: { r: 255, g: 255, b: 255 } }

@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const Module = require('module');
@@ -93,6 +92,120 @@ function setCreateEngine(fn) {
   enginePromise = null;
 }
 
+function pixelSize(value, fallback) {
+  const number = Math.round(Number(value));
+  if (Number.isFinite(number) && number > 0) return number;
+  return fallback;
+}
+
+function nodeCanvas(width, height) {
+  const { createCanvas } = require('@napi-rs/canvas');
+  return createCanvas(pixelSize(width, 1), pixelSize(height, 1));
+}
+
+function asByteBuffer(data) {
+  if (Buffer.isBuffer(data)) return data;
+  return Buffer.from(data.buffer ? data : data);
+}
+
+function pngFromRgba(data, width, height) {
+  width = pixelSize(width, 1);
+  height = pixelSize(height, 1);
+  const canvas = nodeCanvas(width, height);
+  const context = canvas.getContext('2d');
+  const imageData = context.createImageData(width, height);
+  imageData.data.set(asByteBuffer(data).subarray(0, width * height * 4));
+  context.putImageData(imageData, 0, 0);
+  return canvas.toBuffer('image/png');
+}
+
+function rgbaFromRgb(data, width, height) {
+  const source = asByteBuffer(data);
+  const rgba = Buffer.alloc(width * height * 4);
+  for (let index = 0; index < width * height; index += 1) {
+    rgba[index * 4] = source[index * 3];
+    rgba[index * 4 + 1] = source[index * 3 + 1];
+    rgba[index * 4 + 2] = source[index * 3 + 2];
+    rgba[index * 4 + 3] = 255;
+  }
+  return rgba;
+}
+
+function rgbaFromPacked(data, width, height) {
+  const source = asByteBuffer(data);
+  const rgba = Buffer.alloc(width * height * 4, 255);
+  const packedWidth = Math.ceil(width / 8);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const byte = source[y * packedWidth + (x >> 3)] || 0;
+      const bit = (byte >> (7 - (x & 7))) & 1;
+      const index = (y * width + x) * 4;
+      const value = bit ? 0 : 255;
+      rgba[index] = value;
+      rgba[index + 1] = value;
+      rgba[index + 2] = value;
+    }
+  }
+  return rgba;
+}
+
+async function rgbaFromCanvasImage(buffer) {
+  const { loadImage } = require('@napi-rs/canvas');
+  const image = await loadImage(buffer);
+  const canvas = nodeCanvas(image.width, image.height);
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, image.width, image.height);
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, image.width, image.height);
+  return { data: Buffer.from(pixels.data), width: image.width, height: image.height };
+}
+
+async function resizeRgba(image, size) {
+  const sourceWidth = pixelSize(image.width, 1);
+  const sourceHeight = pixelSize(image.height, 1);
+  let width = size && size.width;
+  let height = size && size.height;
+  let fitContain = width != null && height != null;
+  if (width == null && height == null) {
+    width = sourceWidth;
+    height = sourceHeight;
+    fitContain = false;
+  } else if (width == null) {
+    height = pixelSize(height, sourceHeight);
+    width = pixelSize(sourceWidth * (height / sourceHeight), 1);
+    fitContain = false;
+  } else if (height == null) {
+    width = pixelSize(width, sourceWidth);
+    height = pixelSize(sourceHeight * (width / sourceWidth), 1);
+    fitContain = false;
+  } else {
+    width = pixelSize(width, sourceWidth);
+    height = pixelSize(height, sourceHeight);
+  }
+  const png = pngFromRgba(image.data, sourceWidth, sourceHeight);
+  const { loadImage } = require('@napi-rs/canvas');
+  const loaded = await loadImage(png);
+  const canvas = nodeCanvas(width, height);
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  if (fitContain) {
+    const scale = Math.min(width / sourceWidth, height / sourceHeight);
+    const drawWidth = Math.max(1, sourceWidth * scale);
+    const drawHeight = Math.max(1, sourceHeight * scale);
+    context.drawImage(loaded, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+  } else {
+    context.drawImage(loaded, 0, 0, width, height);
+  }
+  const pixels = context.getImageData(0, 0, width, height);
+  return { data: Buffer.from(pixels.data), width, height };
+}
+
+function isRgbaImage(value) {
+  return Boolean(value && value.data && value.width && value.height && !Buffer.isBuffer(value));
+}
+
 async function patchOcrImageRaw() {
   if (patchOcrImageRaw.done) return;
   patchOcrImageRaw.done = true;
@@ -100,26 +213,16 @@ async function patchOcrImageRaw() {
     const file = path.join(path.dirname(require.resolve('@gutenye/ocr-node')), 'ImageRaw.js');
     const loaded = await import(pathToFileURL(file).href);
     const ImageRaw = loaded.ImageRaw;
-    if (!ImageRaw || !ImageRaw.prototype || !ImageRaw.prototype.resize) return;
-    const originalResize = ImageRaw.prototype.resize;
+    if (!ImageRaw || !ImageRaw.prototype) return;
+    ImageRaw.open = async function open(filePath) {
+      return new ImageRaw(await rgbaFromCanvasImage(await fs.promises.readFile(filePath)));
+    };
     ImageRaw.prototype.resize = async function resize(size) {
-      try {
-        return await originalResize.call(this, size);
-      } catch (error) {
-        if (!isColourspaceError(error)) throw error;
-        const { data, info } = await sharp(this.data, {
-          raw: { width: this.width, height: this.height, channels: 4 }
-        }).toColourspace('srgb').resize({
-          width: size.width,
-          height: size.height,
-          fit: 'contain',
-          background: { r: 255, g: 255, b: 255, alpha: 1 }
-        }).ensureAlpha().toColourspace('srgb').raw().toBuffer({ resolveWithObject: true });
-        this.data = data;
-        this.width = info.width;
-        this.height = info.height;
-        return this;
-      }
+      const next = await resizeRgba(this, size || {});
+      this.data = next.data;
+      this.width = next.width;
+      this.height = next.height;
+      return this;
     };
   } catch (error) {
     // OCR can still run if this resize patch cannot load.
@@ -175,27 +278,23 @@ function shimCanvasPackage() {
   };
 }
 
-async function toSrgbPng(buffer) {
-  return sharp(buffer, { failOn: 'none' })
-    .rotate()
-    .flatten({ background: { r: 255, g: 255, b: 255 } })
-    .ensureAlpha()
-    .toColourspace('srgb')
-    .png()
-    .toBuffer();
+async function rgbaFromEncoded(buffer) {
+  try {
+    return await rgbaFromCanvasImage(buffer);
+  } catch (error) {
+    const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    return { data, width: info.width, height: info.height };
+  }
 }
 
-async function ocrImageBuffer(buffer) {
+async function ocrImageBuffer(input) {
   const engine = await getEngine();
-  const png = await toSrgbPng(buffer);
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'dox-ocr-'));
-  const file = path.join(dir, 'page.png');
-  await fs.promises.writeFile(file, png);
-  try {
-    return linesFromOcr(await engine.detect(file));
-  } finally {
-    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+  const image = isRgbaImage(input) ? {
+    data: asByteBuffer(input.data),
+    width: input.width,
+    height: input.height
+  } : await rgbaFromEncoded(input);
+  return linesFromOcr(await engine.detect(image));
 }
 
 class NodeCanvasFactory {
@@ -269,25 +368,12 @@ async function renderPdfPage(document, pageNumber) {
       canvasFactory,
       background: '#ffffff'
     }).promise;
-    return canvasToPng(canvasAndContext);
+    const width = pixelSize(canvasAndContext.canvas.width, 1);
+    const height = pixelSize(canvasAndContext.canvas.height, 1);
+    const pixels = context.getImageData(0, 0, width, height);
+    return { data: Buffer.from(pixels.data), width, height };
   } finally {
     canvasFactory.destroy(canvasAndContext);
-  }
-}
-
-async function canvasToPng(canvasAndContext) {
-  const canvas = canvasAndContext.canvas;
-  const context = canvasAndContext.context;
-  try {
-    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-    return sharp(Buffer.from(imageData.data), {
-      raw: { width: canvas.width, height: canvas.height, channels: 4 }
-    }).toColourspace('srgb').png().toBuffer();
-  } catch (error) {
-    if (typeof canvas.toBuffer === 'function') {
-      return toSrgbPng(canvas.toBuffer('image/png'));
-    }
-    throw error;
   }
 }
 
@@ -322,33 +408,27 @@ async function embeddedPageImages(document, pageNumber) {
   return images.sort((left, right) => (right.width * right.height) - (left.width * left.height));
 }
 
-async function pngFromPdfImage(img) {
+function rgbaFromPdfImage(img) {
   const width = img.width;
   const height = img.height;
-  const source = Buffer.from(img.data);
-  if (img.kind === 1) {
-    const rgba = Buffer.alloc(width * height * 4, 255);
-    const packedWidth = Math.ceil(width / 8);
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        const byte = source[y * packedWidth + (x >> 3)] || 0;
-        const bit = (byte >> (7 - (x & 7))) & 1;
-        const index = (y * width + x) * 4;
-        const value = bit ? 0 : 255;
-        rgba[index] = value;
-        rgba[index + 1] = value;
-        rgba[index + 2] = value;
-      }
-    }
-    return sharp(rgba, { raw: { width, height, channels: 4 } }).toColourspace('srgb').png().toBuffer();
+  const source = asByteBuffer(img.data);
+  if (img.kind === 1 || (!img.kind && source.length < width * height)) {
+    return { data: rgbaFromPacked(source, width, height), width, height };
   }
   const channels = img.kind === 2 ? 3 : 4;
   const expected = width * height * channels;
   if (source.length < expected) throw new Error('The embedded page image is incomplete.');
-  return sharp(source.subarray(0, expected), { raw: { width, height, channels } })
-    .toColourspace('srgb')
-    .png()
-    .toBuffer();
+  const pixels = source.subarray(0, expected);
+  return {
+    data: channels === 3 ? rgbaFromRgb(pixels, width, height) : Buffer.from(pixels),
+    width,
+    height
+  };
+}
+
+async function pngFromPdfImage(img) {
+  const rgba = rgbaFromPdfImage(img);
+  return pngFromRgba(rgba.data, rgba.width, rgba.height);
 }
 
 async function pdfPagePngs(buffer, pageNumber = 1) {
@@ -377,11 +457,13 @@ async function pagePngsFromPdf(document, pageNumber) {
 }
 
 async function ocrEmbeddedImages(document, pageNumber) {
-  const pngs = await pagePngsFromPdf(document, pageNumber);
+  const images = await embeddedPageImages(document, pageNumber);
+  const color = images.filter(img => img.kind === 2 || img.kind === 3);
+  const candidates = (color.length ? color : images).slice(0, 2);
   let lastError = '';
-  for (const png of pngs.slice(0, 2)) {
+  for (const img of candidates) {
     try {
-      const text = await ocrImageBuffer(png);
+      const text = await ocrImageBuffer(rgbaFromPdfImage(img));
       if (hasPrintedText(text)) return text;
     } catch (error) {
       lastError = error && error.message ? error.message : String(error);
@@ -483,5 +565,7 @@ module.exports = {
   setCreateEngine,
   ensureCanvasDom,
   pdfPagePngs,
-  publicOcrError
+  pngFromRgba,
+  publicOcrError,
+  resizeRgba
 };
