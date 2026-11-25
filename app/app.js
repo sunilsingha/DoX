@@ -17,6 +17,12 @@
   let previewUrl = '';
   let previewGeneration = 0;
   let previewLoadingTask = null;
+  let previewPdf = null;
+  let previewZoom = 1;
+  let usageOpen = false;
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 3;
+  const ZOOM_STEP = 0.25;
   const schemaInput = document.getElementById('schema-file');
   const message = document.getElementById('message');
   const guide = document.getElementById('guide');
@@ -38,6 +44,13 @@
   document.getElementById('probe').addEventListener('click', probe);
   document.getElementById('load-schema').addEventListener('click', () => schemaInput.click());
   document.getElementById('header-filter').addEventListener('input', () => renderHeader());
+  document.getElementById('preview-zoom-in').addEventListener('click', () => setPreviewZoom(previewZoom + ZOOM_STEP));
+  document.getElementById('preview-zoom-out').addEventListener('click', () => setPreviewZoom(previewZoom - ZOOM_STEP));
+  document.getElementById('preview-zoom-fit').addEventListener('click', () => setPreviewZoom(1));
+  document.getElementById('usage-toggle').addEventListener('click', () => {
+    usageOpen = !usageOpen;
+    syncUsageToggle();
+  });
   schemaInput.addEventListener('change', () => {
     const file = schemaInput.files && schemaInput.files[0];
     if (file) uploadSchema(file);
@@ -395,9 +408,43 @@
       previewLoadingTask.destroy();
       previewLoadingTask = null;
     }
+    previewPdf = null;
     const pages = document.getElementById('preview-pages');
     pages.hidden = true;
     pages.replaceChildren();
+  }
+
+  function previewBaseWidth() {
+    const frame = document.getElementById('preview-frame');
+    return Math.max((frame && frame.clientWidth ? frame.clientWidth : 480) - 36, 280);
+  }
+
+  function applyPreviewZoom() {
+    const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, previewZoom));
+    previewZoom = Math.round(clamped * 100) / 100;
+    const label = document.getElementById('preview-zoom-label');
+    const pages = document.getElementById('preview-pages');
+    const image = document.getElementById('preview-image');
+    const zoomOut = document.getElementById('preview-zoom-out');
+    const zoomIn = document.getElementById('preview-zoom-in');
+    label.textContent = `${Math.round(previewZoom * 100)}%`;
+    zoomOut.disabled = previewZoom <= ZOOM_MIN;
+    zoomIn.disabled = previewZoom >= ZOOM_MAX;
+    const base = `${previewBaseWidth()}px`;
+    pages.style.setProperty('--preview-zoom', String(previewZoom));
+    pages.style.setProperty('--preview-base-width', base);
+    image.style.setProperty('--preview-zoom', String(previewZoom));
+  }
+
+  function setPreviewZoom(next) {
+    previewZoom = next;
+    applyPreviewZoom();
+  }
+
+  function showPreviewTools(visible) {
+    const tools = document.getElementById('preview-tools');
+    tools.hidden = !visible;
+    if (visible) applyPreviewZoom();
   }
 
   function setPreview(file) {
@@ -414,6 +461,7 @@
     unsupported.hidden = true;
     if (!file) {
       empty.hidden = false;
+      showPreviewTools(false);
       document.getElementById('preview-meta').textContent = 'No file selected.';
       return;
     }
@@ -424,12 +472,15 @@
     const isImage = !isTiff && (type.startsWith('image/') || /\.(png|jpe?g)$/.test(name));
     empty.hidden = true;
     if (isTiff || (!isPdf && !isImage)) {
+      showPreviewTools(false);
       unsupported.hidden = false;
       unsupported.textContent = isTiff
         ? 'TIFF is not shown here, and SAP AI Core vision models do not accept it. Export the page as PNG or JPEG.'
         : 'This file cannot be previewed here. Upload a PDF, PNG, or JPEG.';
       return;
     }
+    previewZoom = 1;
+    showPreviewTools(true);
     if (isPdf) {
       showPdf(file);
       return;
@@ -438,11 +489,13 @@
     image.alt = file.name || 'Uploaded invoice';
     image.onerror = () => {
       image.hidden = true;
+      showPreviewTools(false);
       unsupported.hidden = false;
       unsupported.textContent = 'This image could not be previewed. Upload a PNG or JPEG.';
     };
     image.src = previewUrl;
     image.hidden = false;
+    applyPreviewZoom();
   }
 
   async function showPdf(file) {
@@ -457,6 +510,7 @@
     pages.appendChild(note);
     if (!window.pdfjsLib) {
       pages.hidden = true;
+      showPreviewTools(false);
       unsupported.hidden = false;
       unsupported.textContent = 'The invoice viewer did not load. Refresh the page and open the PDF again.';
       return;
@@ -468,6 +522,7 @@
     } catch (error) {
       if (generation !== previewGeneration) return;
       pages.hidden = true;
+      showPreviewTools(false);
       unsupported.hidden = false;
       unsupported.textContent = 'This PDF could not be opened in the preview.';
       return;
@@ -486,14 +541,17 @@
     } catch (error) {
       if (generation !== previewGeneration) return;
       pages.hidden = true;
+      showPreviewTools(false);
       unsupported.hidden = false;
       unsupported.textContent = 'This PDF could not be opened in the preview.';
       return;
     }
     if (generation !== previewGeneration) return;
+    previewPdf = documentPdf;
     pages.replaceChildren();
-    const count = Math.min(documentPdf.numPages, 8);
-    const width = Math.max(pages.clientWidth - 24, 280);
+    applyPreviewZoom();
+    const count = documentPdf.numPages;
+    const width = previewBaseWidth();
     for (let number = 1; number <= count; number += 1) {
       if (generation !== previewGeneration) return;
       const page = await documentPdf.getPage(number);
@@ -502,7 +560,7 @@
       const canvas = document.createElement('canvas');
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
-      canvas.setAttribute('aria-label', `Invoice page ${number}`);
+      canvas.setAttribute('aria-label', `Invoice page ${number} of ${count}`);
       pages.appendChild(canvas);
       const context = canvas.getContext('2d');
       context.fillStyle = '#ffffff';
@@ -777,6 +835,14 @@
     }
   }
 
+  function syncUsageToggle() {
+    const facts = document.getElementById('usage-facts');
+    const toggle = document.getElementById('usage-toggle');
+    facts.hidden = !usageOpen;
+    toggle.setAttribute('aria-expanded', usageOpen ? 'true' : 'false');
+    toggle.textContent = usageOpen ? 'Hide tokens' : 'Show tokens';
+  }
+
   function renderUsage(usage) {
     const panel = document.getElementById('usage');
     const facts = document.getElementById('usage-facts');
@@ -808,6 +874,7 @@
       ? 'Counts are the sum of the AI Core calls for this extraction. Prompt tokens are the input. Completion tokens are the output.'
       : 'Prompt tokens are the input. Completion tokens are the output. The counts come from the model response.';
     panel.hidden = false;
+    syncUsageToggle();
   }
 
   function usageFact(label, value) {
@@ -907,55 +974,47 @@
 
   function renderLines() {
     const columns = lineColumns();
-    const table = document.getElementById('lines-table');
-    const thead = table.querySelector('thead');
-    const tbody = table.querySelector('tbody');
-    const tfoot = table.querySelector('tfoot');
-    const headRow = document.createElement('tr');
-    columns.forEach(column => {
-      const cell = document.createElement('th');
-      cell.scope = 'col';
-      cell.textContent = column.label || column.name;
-      cell.title = column.name;
-      if (numeric(column)) cell.classList.add('num');
-      headRow.appendChild(cell);
-    });
-    thead.replaceChildren(headRow);
-    tbody.replaceChildren();
+    const list = document.getElementById('lines-list');
+    const totals = document.getElementById('line-totals');
+    list.replaceChildren();
     document.getElementById('line-count').textContent = String(state.lineItems.length);
     if (!state.lineItems.length) {
-      const row = document.createElement('tr');
-      const cell = document.createElement('td');
-      cell.colSpan = Math.max(columns.length, 1);
-      cell.className = 'empty';
-      cell.textContent = 'Line items appear here after extraction.';
-      row.appendChild(cell);
-      tbody.appendChild(row);
-      tfoot.replaceChildren();
+      const empty = document.createElement('p');
+      empty.className = 'line-empty';
+      empty.textContent = 'Line items appear here after extraction.';
+      list.appendChild(empty);
+      totals.hidden = true;
+      totals.replaceChildren();
       return;
     }
-    state.lineItems.forEach(cells => {
+    state.lineItems.forEach((cells, index) => {
       const byName = new Map(cells.map(cell => [cell.name, cell]));
-      const row = document.createElement('tr');
+      const card = document.createElement('article');
+      card.className = 'line-card';
+      card.setAttribute('role', 'listitem');
+      const title = document.createElement('h3');
+      title.textContent = `Line ${index + 1}`;
+      const fields = document.createElement('dl');
+      fields.className = 'line-fields';
       columns.forEach(column => {
-        const field = byName.get(column.name);
-        const cell = document.createElement('td');
-        if (numeric(column)) cell.classList.add('num');
-        if (field && field.confidence != null && field.value !== '' && field.value != null) {
-          const dot = document.createElement('span');
-          dot.className = `dot ${band(field.confidence)}`;
-          dot.title = `Confidence ${Math.round(Number(field.confidence) * 100)}%`;
-          cell.appendChild(dot);
-        }
-        cell.appendChild(document.createTextNode(field ? formatValue(field) : '—'));
-        row.appendChild(cell);
+        const field = byName.get(column.name) || column;
+        const term = document.createElement('dt');
+        term.textContent = column.label || column.name;
+        const value = document.createElement('dd');
+        value.className = numeric(column) ? 'num' : 'value';
+        value.textContent = field ? formatValue(field) : '—';
+        const score = document.createElement('dd');
+        score.className = 'line-score';
+        score.appendChild(confidenceNode(field && field.confidence));
+        fields.append(term, value, score);
       });
-      tbody.appendChild(row);
+      card.append(title, fields);
+      list.appendChild(card);
     });
-    renderTotals(columns, tfoot);
+    renderTotals(columns, totals);
   }
 
-  function renderTotals(columns, tfoot) {
+  function renderTotals(columns, host) {
     const totals = columns.map(column => {
       if (!isTotalColumn(column.name)) return null;
       const numbers = state.lineItems.map(cells => {
@@ -965,26 +1024,21 @@
         return Number.isFinite(value) ? value : null;
       });
       if (numbers.some(value => value == null)) return null;
-      return numbers.reduce((sum, value) => sum + value, 0);
-    });
-    if (!totals.some(value => value != null)) {
-      tfoot.replaceChildren();
+      return { label: column.label || column.name, value: numbers.reduce((sum, value) => sum + value, 0) };
+    }).filter(Boolean);
+    if (!totals.length) {
+      host.hidden = true;
+      host.replaceChildren();
       return;
     }
-    let labelIndex = columns.findIndex(column => column.name === 'description');
-    if (labelIndex < 0) labelIndex = Math.max(0, columns.findIndex(column => !isTotalColumn(column.name)));
-    const row = document.createElement('tr');
-    totals.forEach((total, index) => {
-      const cell = document.createElement('td');
-      if (index === labelIndex) cell.textContent = 'Total';
-      else if (total == null) cell.textContent = '';
-      else {
-        cell.classList.add('num');
-        cell.textContent = formatMoney(total);
-      }
-      row.appendChild(cell);
-    });
-    tfoot.replaceChildren(row);
+    host.replaceChildren(...totals.map(item => {
+      const wrap = document.createElement('div');
+      const label = document.createElement('span');
+      label.textContent = item.label;
+      wrap.append(label, document.createTextNode(formatMoney(item.value)));
+      return wrap;
+    }));
+    host.hidden = false;
   }
 
   function lineColumns() {

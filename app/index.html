@@ -115,6 +115,12 @@
             <h2 id="preview-title">Invoice</h2>
             <p class="panel-sub" id="preview-meta">No file selected.</p>
           </div>
+          <div class="preview-tools" id="preview-tools" hidden>
+            <button type="button" class="btn icon-btn" id="preview-zoom-out" aria-label="Zoom out">−</button>
+            <span id="preview-zoom-label" class="preview-zoom-label">100%</span>
+            <button type="button" class="btn icon-btn" id="preview-zoom-in" aria-label="Zoom in">+</button>
+            <button type="button" class="btn" id="preview-zoom-fit">Fit width</button>
+          </div>
         </div>
         <div class="preview-frame" id="preview-frame">
           <p class="preview-empty" id="preview-empty">The uploaded invoice stays here, beside the extracted fields.</p>
@@ -131,8 +137,9 @@
               <h2 id="usage-title">AI Core usage</h2>
               <p class="panel-sub" id="usage-note">Token counts reported by the model for this extraction.</p>
             </div>
+            <button type="button" class="btn" id="usage-toggle" aria-expanded="false" aria-controls="usage-facts">Show tokens</button>
           </div>
-          <div id="usage-facts" class="facets"></div>
+          <div id="usage-facts" class="facets" hidden></div>
         </section>
         <div id="single-results">
         <section id="facets" class="facets" hidden></section>
@@ -177,14 +184,10 @@
               <p class="panel-sub"><span id="line-count">0</span> rows</p>
             </div>
           </div>
-          <div class="table-scroll">
-            <table id="lines-table">
-              <caption class="sr-only">Extracted invoice line items</caption>
-              <thead></thead>
-              <tbody></tbody>
-              <tfoot></tfoot>
-            </table>
+          <div class="lines-scroll" id="lines-scroll">
+            <div id="lines-list" class="lines-list" role="list"></div>
           </div>
+          <div id="line-totals" class="line-totals" hidden></div>
         </section>
         </div>
 
@@ -216,7 +219,7 @@
           </div>
           <h3 class="compare-lines-title">Line items</h3>
           <p class="panel-sub" id="compare-line-count"></p>
-          <div id="compare-lines"></div>
+          <div class="lines-scroll" id="compare-lines"></div>
         </section>
       </div>
     </section>
