@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const axios = require('axios');
-const { inputModeFrom, ocrDocument } = require('./ocr');
+const { inputModeFrom, ocrDocument, ensureCanvasDom } = require('./ocr');
 
 const IMAGE_TYPES = {
   '.png': 'image/png',
@@ -385,6 +385,7 @@ async function pdfjsPages(buffer) {
   const log = console.log;
   console.log = () => {};
   try {
+    ensureCanvasDom();
     pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
   } catch (error) {
     throw new AiCoreError(`The PDF text library failed to load (${error.message}).`, 500);

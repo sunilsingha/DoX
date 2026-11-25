@@ -92,6 +92,14 @@ setCreateEngine(async () => ({
   assert.ok(pdf.text.includes('Page 2'));
   assert.ok(pdf.text.includes('TAX INVOICE 08492'));
 
+  setCreateEngine(async () => ({ detect: async () => ({ texts: [] }) }));
+  const fallback = await ocrDocument({
+    buffer: textPdf('Invoice 08492 packing list hose quantity 10'),
+    filename: 'invoice.pdf'
+  });
+  assert.ok(fallback.text.includes('08492'), fallback.text);
+  assert.ok(fallback.text.includes('Invoice'), fallback.text);
+
   await assert.rejects(() => ocrDocument({ buffer: Buffer.from('not-a-file'), filename: 'notes.txt' }), /PaddleOCR/);
   setCreateEngine(null);
   console.log('ocr tests passed');
