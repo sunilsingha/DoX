@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, executableFor, geminiPayload, anthropicPayload, conversePayload, anthropicUrl, converseUrl, inferenceUrl, messageText, readUsage, combineUsage, linesFromItems, groupPages, planPdfJobs, textCoversDocument, mergeExtractions, salvageModelContent } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, executableFor, geminiPayload, anthropicPayload, conversePayload, anthropicUrl, converseUrl, inferenceUrl, messageText, readUsage, combineUsage, linesFromItems, groupPages, planPdfJobs, textCoversDocument, mergeExtractions, salvageModelContent, extractionEmpty, shouldRetryAsText } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -23,12 +23,22 @@ assert.strictEqual(mapped.header.find(field => field.name === 'invoiceNumber').v
 assert.strictEqual(mapped.header.find(field => field.name === 'invoiceDate').value, '2026-11-02');
 assert.strictEqual(mapped.lineItems[0].find(field => field.name === 'quantity').value, 2);
 assert.strictEqual(mapped.lineItems[0].find(field => field.name === 'description').confidence, 0.8);
+const fromArray = mapExtraction(schema, {
+  header: [{ name: 'Invoice Number', value: '08492' }],
+  lineItems: [{ Description: 'Hose', Quantity: 10 }]
+});
+assert.strictEqual(fromArray.header.find(field => field.name === 'invoiceNumber').value, '08492');
+assert.strictEqual(fromArray.lineItems[0].find(field => field.name === 'description').value, 'Hose');
+assert.strictEqual(fromArray.lineItems[0].find(field => field.name === 'quantity').value, 10);
+assert.strictEqual(extractionEmpty(mapped), false);
+assert.strictEqual(extractionEmpty({ header: mapped.header.map(field => ({ ...field, value: '' })), lineItems: [] }), true);
 
 const prompt = extractionPrompt(loadSchemaSync());
 assert.ok(prompt.includes('invoiceNumber'));
 assert.ok(prompt.includes('hsnCode'));
 assert.ok(prompt.includes('ZSFL_GST_Invoice'));
 assert.ok(prompt.includes('every line item'));
+assert.ok(prompt.includes('packing list'));
 assert.ok(extractionPrompt(schema, { pages: [3, 4], pageCount: 32 }).includes('page 3, 4 of 32'));
 
 assert.strictEqual(isChatModel('gpt-4o'), true);
@@ -184,14 +194,17 @@ const anthropicBody = anthropicPayload([
   { type: 'file', file: { filename: 'invoice.pdf', file_data: 'data:application/pdf;base64,JVBERg==' } }
 ]);
 assert.strictEqual(anthropicBody.anthropic_version, 'bedrock-2023-05-31');
-assert.strictEqual(anthropicBody.messages[0].content[1].type, 'image');
-assert.strictEqual(anthropicBody.messages[0].content[1].source.media_type, 'image/png');
-assert.strictEqual(anthropicBody.messages[0].content[2].type, 'document');
+assert.strictEqual(anthropicBody.messages[0].content[0].type, 'image');
+assert.strictEqual(anthropicBody.messages[0].content[0].source.media_type, 'image/png');
+assert.strictEqual(anthropicBody.messages[0].content[1].type, 'document');
+assert.strictEqual(anthropicBody.messages[0].content[2].type, 'text');
 assert.ok(!Object.prototype.hasOwnProperty.call(anthropicBody, 'model'));
 const converseBody = conversePayload('Extract');
 assert.strictEqual(converseBody.messages[0].content[0].text, 'Extract');
 const claudeText = messageText({ content: [{ type: 'text', text: '{"header":{}}' }], stop_reason: 'end_turn' });
 assert.ok(claudeText.includes('header'));
+assert.ok(messageText({ content: '{"header":{"invoiceNumber":{"value":"08492"}}}' }).includes('08492'));
+assert.ok(messageText({ body: JSON.stringify({ content: [{ type: 'text', text: '{"ok":true}' }] }) }).includes('ok'));
 const converseText = messageText({ output: { message: { content: [{ text: '{"lineItems":[]}' }] } } });
 assert.ok(converseText.includes('lineItems'));
 const claudeUsage = readUsage({
@@ -355,8 +368,11 @@ prepareDocument(textPdf('Invoice ZSFL 26-27 0148 taxable amount 30940 supplier N
   assert.strictEqual(resolved.resourceGroup, 'default');
   assert.strictEqual(pdf.kind, 'pdf');
   const content = userContent(schema, pdf);
-  assert.strictEqual(content[1].type, 'file');
-  assert.ok(content[1].file.file_data.startsWith('data:application/pdf;base64,'));
+  assert.strictEqual(content[0].type, 'file');
+  assert.ok(content[0].file.file_data.startsWith('data:application/pdf;base64,'));
+  const withText = userContent(schema, { ...pdf, text: 'Invoice 08492 packing list hose quantity 10 freight outbound' });
+  assert.ok(String(withText[1].text).includes('DOCUMENT TEXT'));
+  assert.ok(shouldRetryAsText({ kind: 'pdf', text: 'Invoice 08492 packing list hose quantity 10 freight outbound' }, {}, { header: [{ value: '' }], lineItems: [] }));
   const text = await readPdfText(textPdf('Invoice ZSFL 26-27 0148 taxable amount 30940 supplier Northwind Components'));
   assert.ok(text.includes('ZSFL 26-27 0148'));
   const manyPages = await readPdfText(textPdf(['Page one bolt quantity 2', 'Page two nut quantity 4', 'Page three washer quantity 8']));

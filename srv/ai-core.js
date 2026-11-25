@@ -193,11 +193,13 @@ function extractionPrompt(schema, scope) {
     ? `This part is page ${scope.pages.join(', ')} of ${scope.pageCount}.`
     : 'Read every page of the document.';
   return [
-    `Extract the document into the schema "${schema.name}".`,
+    `Extract the attached document into the schema "${schema.name}".`,
     'Return one JSON object and nothing else.',
     coverage,
-    'Return every line item in this part, in the order printed. Do not stop after the first row or the first page, and do not return a sample row.',
-    'Use an empty string for value when the document does not contain that field. Do not invent GSTINs, totals, or line items.',
+    'Read the document even if it is a commercial invoice, packing list, or purchase order rather than an Indian GST tax invoice.',
+    'Fill every schema field that is printed. Map the closest fact onto the field: invoice or packing-list number, PO, dates, supplier, buyer, currency, amounts, and each line row.',
+    'Return every line item in this part, in the order printed. Include a row even when HSN or GST columns are blank. Do not stop after the first row or the first page, and do not return a sample row.',
+    'Use an empty string only when that fact is not printed. Do not invent GSTINs or values that are not on the document.',
     'confidence is your own estimate from 0 to 1, or null when the value is empty.',
     'Dates use YYYY-MM-DD. Numbers are JSON numbers, without currency symbols.',
     'header is an object keyed by field name. lineItems is an array of objects keyed by field name.',
@@ -462,27 +464,33 @@ async function prepareDocument(buffer, filename) {
   throw new AiCoreError('Upload a PDF, PNG, or JPEG invoice.', 400);
 }
 
+function usableText(text) {
+  return String(text || '').replace(/\s/g, '').length >= PAGE_TEXT_CHARS;
+}
+
 function userContent(schema, prepared, scope) {
   const prompt = extractionPrompt(schema, scope);
+  const printed = prepared.text || (scope && scope.fallbackText) || '';
+  const promptWithText = usableText(printed) ? `${prompt}\n\nDOCUMENT TEXT:\n${printed}` : prompt;
   if (prepared.kind === 'image') {
     return [
-      { type: 'text', text: prompt },
       {
         type: 'image_url',
         image_url: { url: `data:${prepared.mediaType};base64,${prepared.base64}` }
-      }
+      },
+      { type: 'text', text: promptWithText }
     ];
   }
   if (prepared.kind === 'pdf') {
     return [
-      { type: 'text', text: prompt },
       {
         type: 'file',
         file: {
           filename: prepared.filename || 'invoice.pdf',
           file_data: `data:application/pdf;base64,${prepared.base64}`
         }
-      }
+      },
+      { type: 'text', text: promptWithText }
     ];
   }
   return `${prompt}\n\nDOCUMENT TEXT:\n${prepared.text}`;
@@ -579,23 +587,42 @@ function combineUsage(parts, context) {
   };
 }
 
+function partsText(parts) {
+  if (typeof parts === 'string') return parts;
+  if (!Array.isArray(parts)) return '';
+  return parts.map(part => {
+    if (typeof part === 'string') return part;
+    if (!part || typeof part !== 'object') return '';
+    if (part.text) return part.text;
+    if (part.json != null) return typeof part.json === 'string' ? part.json : JSON.stringify(part.json);
+    return '';
+  }).filter(Boolean).join('\n');
+}
+
 function messageText(payload) {
-  const geminiParts = payload && payload.candidates && payload.candidates[0] && payload.candidates[0].content && payload.candidates[0].content.parts;
-  if (Array.isArray(geminiParts)) return geminiParts.map(part => (part && part.text) || '').join('\n');
-  const converseParts = payload && payload.output && payload.output.message && payload.output.message.content;
-  if (Array.isArray(converseParts)) {
-    return converseParts.map(part => (part && (part.text || (part.type === 'text' && part.text))) || '').join('\n');
+  if (payload == null) return '';
+  if (typeof payload === 'string') return payload;
+  if (typeof payload.body === 'string') {
+    try {
+      const nested = messageText(JSON.parse(payload.body));
+      if (nested) return nested;
+    } catch (error) {
+      if (payload.body.trim()) return payload.body;
+    }
+  } else if (payload.body && typeof payload.body === 'object' && payload.body !== payload) {
+    const nested = messageText(payload.body);
+    if (nested) return nested;
   }
-  if (Array.isArray(payload && payload.content)) {
-    return payload.content.map(part => (typeof part === 'string' ? part : (part && part.text) || '')).join('\n');
-  }
-  const choice = payload && payload.choices && payload.choices[0];
+  const geminiParts = payload.candidates && payload.candidates[0] && payload.candidates[0].content && payload.candidates[0].content.parts;
+  const geminiText = partsText(geminiParts);
+  if (geminiText) return geminiText;
+  const converseText = partsText(payload.output && payload.output.message && payload.output.message.content);
+  if (converseText) return converseText;
+  const direct = partsText(payload.content);
+  if (direct) return direct;
+  const choice = payload.choices && payload.choices[0];
   const content = choice && choice.message && choice.message.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map(part => (typeof part === 'string' ? part : part.text || '')).join('\n');
-  }
-  return '';
+  return partsText(content);
 }
 
 function parseModelContent(text) {
@@ -625,6 +652,25 @@ function readCell(raw) {
   return { value: raw, confidence: null };
 }
 
+function normalizeKey(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function lookupRaw(source, field) {
+  if (source == null) return undefined;
+  if (Array.isArray(source)) {
+    const wanted = new Set([field.name, field.label].map(normalizeKey).filter(Boolean));
+    const hit = source.find(item => wanted.has(normalizeKey(item && (item.name || item.label || item.key || item.field))));
+    if (!hit) return undefined;
+    return Object.prototype.hasOwnProperty.call(hit, 'value') ? hit : { value: hit.text || hit.content || '' };
+  }
+  if (typeof source !== 'object') return undefined;
+  if (Object.prototype.hasOwnProperty.call(source, field.name)) return source[field.name];
+  const wanted = new Set([field.name, field.label].map(normalizeKey).filter(Boolean));
+  const key = Object.keys(source).find(name => wanted.has(normalizeKey(name)));
+  return key ? source[key] : undefined;
+}
+
 function rowObject(row) {
   if (Array.isArray(row)) {
     return Object.fromEntries(row.filter(cell => cell && cell.name).map(cell => [cell.name, cell]));
@@ -632,18 +678,27 @@ function rowObject(row) {
   return row && typeof row === 'object' ? row : {};
 }
 
+function headerSourceFrom(body) {
+  if (Array.isArray(body.header) && body.header.length) return body.header;
+  if (body.header && typeof body.header === 'object' && Object.keys(body.header).length) return body.header;
+  if (Array.isArray(body.headerFields) && body.headerFields.length) return body.headerFields;
+  if (body.headerFields && typeof body.headerFields === 'object' && Object.keys(body.headerFields).length) return body.headerFields;
+  return body;
+}
+
 function mapExtraction(schema, parsed) {
   const body = parsed && typeof parsed === 'object' ? parsed : {};
-  const headerSource = body.header || body.headerFields || {};
+  const headerSource = headerSourceFrom(body);
   const header = schema.headerFields.map(field => {
-    const cell = readCell(headerSource[field.name]);
+    const cell = readCell(lookupRaw(headerSource, field));
     return { ...field, value: cell.value, confidence: cell.confidence };
   });
-  const rows = body.lineItems || body.lineItemFields || [];
+  const rows = body.lineItems || body.lineItemFields || body.items || [];
   const lineItems = (Array.isArray(rows) ? rows : []).map(row => {
     const source = rowObject(row);
     return schema.lineItemFields.map(field => {
-      const cell = readCell(source[field.name]);
+      const raw = lookupRaw(source, field);
+      const cell = readCell(raw != null ? raw : lookupRaw(row, field));
       return { ...field, value: cell.value, confidence: cell.confidence };
     });
   });
@@ -935,9 +990,13 @@ function dataUrlParts(source) {
   return match ? { mediaType: match[1], data: match[2] } : null;
 }
 
+function contentHasMedia(content) {
+  return Array.isArray(content) && content.some(item => item && (item.type === 'file' || item.type === 'image_url' || item.type === 'image'));
+}
+
 function anthropicBlocks(content) {
   if (typeof content === 'string') return content;
-  return (Array.isArray(content) ? content : [content]).map(item => {
+  const blocks = (Array.isArray(content) ? content : [content]).map(item => {
     if (!item) return null;
     if (typeof item === 'string') return { type: 'text', text: item };
     if (item.type === 'text') return { type: 'text', text: item.text || '' };
@@ -952,13 +1011,16 @@ function anthropicBlocks(content) {
       if (String(parts.mediaType).startsWith('image/')) {
         return { type: 'image', source: { type: 'base64', media_type: parts.mediaType, data: parts.data } };
       }
-      return {
+      const document = {
         type: 'document',
         source: { type: 'base64', media_type: parts.mediaType || 'application/pdf', data: parts.data }
       };
+      if (item.file && item.file.filename) document.title = item.file.filename;
+      return document;
     }
     return null;
   }).filter(Boolean);
+  return [...blocks.filter(item => item.type !== 'text'), ...blocks.filter(item => item.type === 'text')];
 }
 
 function anthropicPayload(content) {
@@ -1237,6 +1299,27 @@ function subpathRejected(response) {
   return response && response.status === 400 && detail.includes('subpath');
 }
 
+function documentRejected(response) {
+  const detail = `${safeDetail(response && response.data)}`.toLowerCase();
+  if (!response || response.status === 200) return false;
+  return /document|pdf|media|content.?type|unsupported|invalid/.test(detail);
+}
+
+async function completeAnthropic(config, token, group, deployment, content) {
+  const invoke = () => postInference(config, token, group, anthropicUrl(config, deployment), anthropicPayload(content), {});
+  const converse = () => postInference(config, token, group, converseUrl(config, deployment), conversePayload(content), {});
+  if (contentHasMedia(content)) {
+    const conversed = await converse();
+    if (conversed.status === 200) return conversed;
+    const invoked = await invoke();
+    if (invoked.status === 200) return invoked;
+    return documentRejected(conversed) ? invoked : conversed;
+  }
+  const invoked = await invoke();
+  if (invoked.status === 200 || !subpathRejected(invoked)) return invoked;
+  return converse();
+}
+
 async function completeChat(config, token, group, deployment, content, model) {
   const modelName = typeof model === 'string' ? model : (model && model.modelName) || '';
   const executableId = typeof model === 'object' && model ? model.executableId : '';
@@ -1248,11 +1331,7 @@ async function completeChat(config, token, group, deployment, content, model) {
     if (response.status !== 400) return response;
     return postInference(config, token, group, url, geminiPayload(content, { json: false, thinking: false }), {});
   }
-  if (provider === 'anthropic') {
-    const invoked = await postInference(config, token, group, anthropicUrl(config, deployment), anthropicPayload(content), {});
-    if (!subpathRejected(invoked)) return invoked;
-    return postInference(config, token, group, converseUrl(config, deployment), conversePayload(content), {});
-  }
+  if (provider === 'anthropic') return completeAnthropic(config, token, group, deployment, content);
   const params = {};
   if (config.apiVersion && config.apiVersion.toLowerCase() !== 'none') params['api-version'] = config.apiVersion;
   return postInference(config, token, group, inferenceUrl(config, deployment), chatPayload(modelName, content), params);
@@ -1341,6 +1420,18 @@ function rowHasValue(row) {
   return (row || []).some(cell => cell && cell.value !== '' && cell.value != null);
 }
 
+function extractionEmpty(extracted) {
+  const headerHit = (extracted && extracted.header || []).some(field => field && field.value !== '' && field.value != null);
+  return !headerHit && !(extracted && extracted.lineItems || []).length;
+}
+
+function shouldRetryAsText(prepared, scope, extracted) {
+  if (!extracted || !prepared || prepared.kind !== 'pdf') return false;
+  const text = (scope && scope.fallbackText) || prepared.text || '';
+  if (!usableText(text)) return false;
+  return extractionEmpty(extracted);
+}
+
 function dropEmptyLines(extracted) {
   if (!extracted) return { header: [], lineItems: [] };
   return {
@@ -1416,7 +1507,14 @@ async function extractPrepared(context, prepared, scope, responses, depth = 0) {
   try {
     parsed = readModelExtraction(context.schema, response.data);
   } catch (error) {
+    const printed = (scope && scope.fallbackText) || prepared.text || '';
+    if (prepared.kind === 'pdf' && usableText(printed) && depth < 4) {
+      return extractPrepared(context, { kind: 'text', text: printed }, scope, responses, depth + 1);
+    }
     if (!truncated || prepared.kind !== 'text' || depth >= 4) throw error;
+  }
+  if (shouldRetryAsText(prepared, scope, parsed) && depth < 4) {
+    return extractPrepared(context, { kind: 'text', text: (scope && scope.fallbackText) || prepared.text }, scope, responses, depth + 1);
   }
   if (!truncated || prepared.kind !== 'text' || depth >= 4) return parsed;
   const pieces = splitText(prepared.text);
@@ -1460,7 +1558,8 @@ async function extractPdf(context, buffer, responses) {
     return extractPrepared(context, {
       kind: 'pdf',
       filename: `page-${job.pages[0]}.pdf`,
-      base64: slice.toString('base64')
+      base64: slice.toString('base64'),
+      text: page && page.text
     }, { ...scope, fallbackText: page && page.text }, responses);
   });
   return { merged: mergeExtractions(parts), pageCount };
@@ -1539,6 +1638,9 @@ module.exports = {
   geminiPayload,
   anthropicPayload,
   conversePayload,
+  contentHasMedia,
+  extractionEmpty,
+  shouldRetryAsText,
   anthropicUrl,
   converseUrl,
   inferenceUrl,
