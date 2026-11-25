@@ -38,6 +38,11 @@
         <label><input type="radio" name="source" value="document" /> SAP Document AI</label>
         <label><input type="radio" name="source" value="both" /> Compare both</label>
       </div>
+      <span id="input-mode-label" class="for-aicore">Read with</span>
+      <div class="source-toggle input-mode-toggle for-aicore" role="radiogroup" aria-labelledby="input-mode-label">
+        <label><input type="radio" name="input-mode" value="ocr" /> PaddleOCR then LLM</label>
+        <label><input type="radio" name="input-mode" value="vision" checked /> Vision LLM</label>
+      </div>
       <label class="model-picker for-aicore" for="model-name">
         Model
         <select id="model-name">
@@ -45,6 +50,7 @@
         </select>
       </label>
       <p class="model-note for-aicore" id="model-note">The menu lists running chat deployments only.</p>
+      <p class="model-note for-aicore" id="input-mode-note">Vision LLM sends the PDF or image to the selected model.</p>
     </div>
 
     <div id="schema-note" class="strip information" hidden></div>
@@ -57,7 +63,7 @@
             <path fill="#0070f2" d="M24 6l10 10h-6v12h-8V16h-6l10-10zm-14 26h28v6H10v-6z" opacity=".9"/>
           </svg>
           <p class="drop-title">Drop an invoice here</p>
-          <p class="drop-sub">Digital PDF, PNG, or JPEG · up to 20 MB</p>
+          <p class="drop-sub">PDF, PNG, or JPEG · up to 20 MB · PaddleOCR also reads scans</p>
           <input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,application/pdf,image/png,image/jpeg,image/tiff" hidden />
         </div>
         <div class="upload-side">

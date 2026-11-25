@@ -266,6 +266,14 @@ h2 { font-size: 1.125rem; }
 .source-toggle input { position: absolute; opacity: 0; }
 .source-toggle label:has(input:checked) { background: var(--sapBrandColor); color: #fff; }
 .source-toggle label:has(input:focus-visible) { outline: 2px solid var(--sapBrandColor); outline-offset: -2px; }
+.source-toggle.input-mode-toggle {
+  flex: 1 1 16rem;
+  max-width: 28rem;
+}
+.for-aicore[hidden],
+.for-document[hidden] {
+  display: none !important;
+}
 
 .compare-lines-title { margin: 1.25rem 0 0.2rem; font-size: 1.15rem; font-weight: 400; }
 .compare-line { margin-top: 0.85rem; }

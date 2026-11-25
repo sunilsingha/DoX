@@ -34,6 +34,9 @@
   document.querySelectorAll('input[name="source"]').forEach(input => {
     input.addEventListener('change', syncSourceFields);
   });
+  document.querySelectorAll('input[name="input-mode"]').forEach(input => {
+    input.addEventListener('change', syncInputModeNote);
+  });
   syncSourceFields();
   document.getElementById('model-name').addEventListener('change', applyModelChoice);
   document.getElementById('resource-group').addEventListener('change', () => loadModels());
@@ -207,6 +210,24 @@
     return picked ? picked.value : 'aicore';
   }
 
+  function selectedInputMode() {
+    const picked = document.querySelector('input[name="input-mode"]:checked');
+    return picked && picked.value === 'ocr' ? 'ocr' : 'vision';
+  }
+
+  function syncInputModeNote() {
+    const note = document.getElementById('input-mode-note');
+    if (!note) return;
+    if (selectedSource() === 'document') {
+      note.hidden = true;
+      return;
+    }
+    note.hidden = false;
+    note.textContent = selectedInputMode() === 'ocr'
+      ? 'PaddleOCR reads the PDF or image, then the selected model writes the schema JSON. Token counts come from that model, not from OCR.'
+      : 'Vision LLM sends the PDF or image to the selected model. Token counts include the page images.';
+  }
+
   function syncSourceFields() {
     const source = selectedSource();
     document.querySelectorAll('.for-aicore').forEach(node => { node.hidden = source === 'document'; });
@@ -217,12 +238,13 @@
       hint.innerHTML = 'Document AI extracts with the schema name and version. The client is usually <code>default</code>. A template is required when the schema fields use manual setup.';
       extract.textContent = 'Extract invoice';
     } else if (source === 'both') {
-      hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. The Model menu chooses which running AI Core deployment to compare with Document AI.';
+      hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. The Model menu chooses which running AI Core deployment to compare with Document AI. Read with applies to the AI Core side.';
       extract.textContent = 'Extract with both';
     } else {
       hint.innerHTML = 'GPT, Gemini, and Claude each have their own deployment. Choose the model above. GPT and Gemini IDs are filled from <code>default-env.json</code>.';
       extract.textContent = 'Extract invoice';
     }
+    syncInputModeNote();
   }
 
   function paintPill(node, configured, label, host) {
@@ -794,13 +816,19 @@
     form.set('deploymentId', choice.deploymentId || (geminiChoice ? document.getElementById('gemini-deployment-id').value.trim() : document.getElementById('deployment-id').value.trim()));
     form.set('doxClient', document.getElementById('dox-client').value.trim());
     form.set('template', document.getElementById('template').value.trim());
+    form.set('inputMode', selectedInputMode());
     if (file) form.set('file', file);
     setBusy(true);
+    const inputMode = selectedInputMode();
     const waiting = source === 'both'
-      ? 'Uploading the invoice to Document AI and SAP AI Core.'
+      ? (inputMode === 'ocr'
+        ? 'Document AI reads the file. AI Core runs PaddleOCR, then the selected model.'
+        : 'Uploading the invoice to Document AI and SAP AI Core.')
       : source === 'document'
         ? 'Uploading the invoice and waiting for Document AI.'
-        : 'Uploading the invoice and waiting for SAP AI Core.';
+        : inputMode === 'ocr'
+          ? 'Reading the invoice with PaddleOCR, then sending the text to the selected model.'
+          : 'Uploading the invoice and waiting for SAP AI Core.';
     showMessage('information', mode === 'sample'
       ? 'Filling the tables with a sample GST invoice.'
       : waiting);
@@ -840,11 +868,12 @@
     const model = result.modelName ? ` Model ${result.modelName}.` : '';
     const pages = result.pages ? ` ${result.pages} pages.` : '';
     const lines = Array.isArray(result.lineItems) ? ` ${result.lineItems.length} line items.` : '';
+    const read = result.usage && result.usage.inputMode === 'ocr' ? ' PaddleOCR then the selected model.' : '';
     if (!filled) {
-      showMessage('critical', `${sourceName} finished with no values.${job}${model}`);
+      showMessage('critical', `${sourceName} finished with no values.${job}${model}${read}`);
       return;
     }
-    showMessage('positive', `${sourceName} extraction ${result.status}.${job}${model}${pages}${lines}`);
+    showMessage('positive', `${sourceName} extraction ${result.status}.${job}${model}${pages}${lines}${read}`);
   }
 
   function renderComparison(result) {
@@ -856,9 +885,12 @@
     const summary = comparison.summary || {};
     const model = result.aiCore && result.aiCore.modelName ? ` AI Core model: ${result.aiCore.modelName}.` : '';
     const pages = result.aiCore && result.aiCore.pages ? ` AI Core pages: ${result.aiCore.pages}.` : '';
+    const read = result.aiCore && result.aiCore.usage && result.aiCore.usage.inputMode === 'ocr'
+      ? ' AI Core read with PaddleOCR then the selected model.'
+      : '';
     document.getElementById('compare-summary').textContent = result.sample
       ? `Sample only. ${summary.headerMatch || 0} header fields match and ${summary.headerDiffer || 0} differ.`
-      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.${model}${pages}`;
+      : `${summary.headerMatch || 0} header fields match. ${summary.headerDiffer || 0} differ. Document AI lines: ${summary.documentLines || 0}. AI Core lines: ${summary.coreLines || 0}.${model}${pages}${read}`;
     const errors = document.getElementById('compare-errors');
     errors.replaceChildren();
     const documentPending = Boolean(result.documentAi && result.documentAi.pending && result.documentAi.jobId);
@@ -1065,12 +1097,18 @@
     const panel = document.getElementById('usage');
     const facts = document.getElementById('usage-facts');
     const note = document.getElementById('usage-note');
-    if (!usage || (usage.totalTokens == null && usage.promptTokens == null && usage.completionTokens == null)) {
+    const hasTokens = usage && (usage.totalTokens != null || usage.promptTokens != null || usage.completionTokens != null);
+    if (!usage || (!hasTokens && !usage.inputMode)) {
       panel.hidden = true;
       facts.replaceChildren();
       return;
     }
+    const ocr = usage.inputMode === 'ocr';
     const items = [
+      ['Read with', ocr ? 'PaddleOCR then LLM' : 'Vision LLM'],
+      ['OCR engine', ocr ? 'PaddleOCR' : ''],
+      ['OCR model', ocr ? usage.ocrModel : ''],
+      ['OCR pages', ocr && usage.ocrPages != null ? String(usage.ocrPages) : ''],
       ['Model', usage.reportedModel || usage.model],
       ['Selected model', usage.model && usage.model !== usage.reportedModel ? usage.model : ''],
       ['Deployment', usage.deploymentId],
@@ -1088,9 +1126,15 @@
     (usage.completionDetails || []).forEach(item => items.push([`Completion ${String(item.modality).toLowerCase()}`, formatCount(item.tokens)]));
     if (usage.calls > 1) items.push(['AI Core calls', String(usage.calls)]);
     facts.replaceChildren(...items.filter(([, value]) => value !== '' && value != null).map(([label, value]) => usageFact(label, value)));
-    note.textContent = usage.calls > 1
-      ? 'Counts are the sum of the AI Core calls for this extraction. Prompt tokens are the input. Completion tokens are the output.'
-      : 'Prompt tokens are the input. Completion tokens are the output. The counts come from the model response.';
+    if (ocr) {
+      note.textContent = usage.calls > 1
+        ? 'PaddleOCR read the pages locally. Token counts are the sum of the selected model calls on that text.'
+        : 'PaddleOCR read the pages locally. Token counts come from the selected model on that text, not from OCR.';
+    } else {
+      note.textContent = usage.calls > 1
+        ? 'Counts are the sum of the AI Core calls for this extraction. Prompt tokens are the input. Completion tokens are the output.'
+        : 'Prompt tokens are the input. Completion tokens are the output. The counts come from the model response.';
+    }
     panel.hidden = false;
     syncUsageToggle();
   }

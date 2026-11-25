@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const axios = require('axios');
+const { inputModeFrom, ocrDocument } = require('./ocr');
 
 const IMAGE_TYPES = {
   '.png': 'image/png',
@@ -553,7 +554,8 @@ function tokenDetails(details) {
 
 function combineUsage(parts, context) {
   const rows = (parts || []).filter(Boolean);
-  if (!rows.length) return null;
+  const extra = context || {};
+  if (!rows.length && extra.inputMode !== 'ocr') return null;
   const sum = key => {
     const values = rows.map(row => row[key]).filter(value => value != null);
     if (!values.length) return null;
@@ -566,14 +568,17 @@ function combineUsage(parts, context) {
     }));
     return [...totals.entries()].map(([modality, tokens]) => ({ modality, tokens }));
   };
-  const last = [...rows].reverse().find(row => row.model) || rows[rows.length - 1];
-  const extra = context || {};
+  const last = rows.length ? ([...rows].reverse().find(row => row.model) || rows[rows.length - 1]) : {};
   return {
     model: extra.modelName || last.model || '',
     reportedModel: last.model || extra.modelName || '',
     deploymentId: extra.deploymentId || '',
     resourceGroup: extra.resourceGroup || '',
     executableId: extra.executableId || '',
+    inputMode: extra.inputMode || 'vision',
+    ocrEngine: extra.ocrEngine || '',
+    ocrModel: extra.ocrModel || '',
+    ocrPages: extra.ocrPages != null ? extra.ocrPages : null,
     inputTokens: sum('inputTokens'),
     outputTokens: sum('outputTokens'),
     promptTokens: sum('promptTokens'),
@@ -1565,7 +1570,20 @@ async function extractPdf(context, buffer, responses) {
   return { merged: mergeExtractions(parts), pageCount };
 }
 
-async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId, modelName, executableId }) {
+async function extractOcr(context, ocr, responses) {
+  const pages = (ocr.pageTexts || []).map(page => ({ number: page.number, text: page.text || '' }));
+  const jobs = groupPages(pages.length ? pages : [{ number: 1, text: ocr.text || '' }]);
+  const parts = await mapPool(jobs, EXTRACT_CONCURRENCY, async group => {
+    const text = group.map(page => `Page ${page.number}\n${page.text}`).join('\n\n');
+    return extractPrepared(context, { kind: 'text', text }, {
+      pages: group.map(page => page.number),
+      pageCount: ocr.pageCount || pages.length || 1
+    }, responses);
+  });
+  return { merged: mergeExtractions(parts), pageCount: ocr.pageCount || pages.length || 1 };
+}
+
+async function extractDocument({ buffer, filename, schema, resourceGroup, deploymentId, modelName, executableId, inputMode }) {
   const config = loadConfig();
   const requestedModel = String(modelName || '').trim();
   const missing = missingKeys({
@@ -1575,7 +1593,9 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
   if (missing.length) {
     throw new AiCoreError(`SAP AI Core is not configured. Add ${missing.join(', ')} to default-env.json.`, 400);
   }
-  const prepared = await prepareDocument(buffer, filename);
+  const readAs = inputModeFrom(inputMode);
+  let prepared = null;
+  if (readAs !== 'ocr') prepared = await prepareDocument(buffer, filename);
   const token = await getToken(config);
   const group = String(resourceGroup || config.resourceGroup || 'default').trim() || 'default';
   const resolved = await resolveChatDeployment(config, token, group, { modelName: requestedModel, deploymentId, executableId });
@@ -1591,9 +1611,25 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
     schema
   };
   const responses = [];
-  const outcome = prepared.kind === 'pdf'
-    ? await extractPdf(context, buffer, responses)
-    : { merged: await extractPrepared(context, prepared, null, responses), pageCount: 0 };
+  let ocrMeta = null;
+  let outcome;
+  if (readAs === 'ocr') {
+    let ocr;
+    try {
+      ocr = await ocrDocument({ buffer, filename });
+    } catch (error) {
+      throw error instanceof AiCoreError ? error : new AiCoreError(error.message || 'PaddleOCR failed.', error.status || 500);
+    }
+    if (!usableText(ocr.text)) {
+      throw new AiCoreError('PaddleOCR did not read enough text from this file. Try Vision LLM.', 400);
+    }
+    ocrMeta = { engine: ocr.engine, model: ocr.model, pages: ocr.pages };
+    outcome = await extractOcr(context, ocr, responses);
+  } else {
+    outcome = prepared.kind === 'pdf'
+      ? await extractPdf(context, buffer, responses)
+      : { merged: await extractPrepared(context, prepared, null, responses), pageCount: 0 };
+  }
   return {
     ...outcome.merged,
     pages: outcome.pageCount || undefined,
@@ -1604,7 +1640,11 @@ async function extractDocument({ buffer, filename, schema, resourceGroup, deploy
       modelName: model,
       deploymentId: deployment,
       resourceGroup: inferenceGroup,
-      executableId: resolved.executableId || ''
+      executableId: resolved.executableId || '',
+      inputMode: readAs,
+      ocrEngine: ocrMeta && ocrMeta.engine,
+      ocrModel: ocrMeta && ocrMeta.model,
+      ocrPages: ocrMeta && ocrMeta.pages
     })
   };
 }
@@ -1654,5 +1694,6 @@ module.exports = {
   salvageModelContent,
   readUsage,
   combineUsage,
+  inputModeFrom,
   listChatModels
 };

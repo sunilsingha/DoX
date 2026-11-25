@@ -86,9 +86,12 @@ Use Test connection before the first invoice. A success message means the servic
 1. Choose the schema.
 2. Drop a digital PDF, PNG, or JPEG. Up to 20 MB.
 3. Choose a model when AI Core or Compare both is selected. Configured deployment uses `AICORE_DEPLOYMENT_ID`. Open Request options to use a different resource group.
-4. Press Extract invoice.
+4. Choose **Read with**: **PaddleOCR then LLM** or **Vision LLM**. Document AI ignores this choice.
+5. Press Extract invoice.
 
-A PDF is sent to the model with the field list, so the model reads the pages itself. If that deployment refuses a PDF attachment, the app reads the text from the file and sends the text instead. A PNG or JPEG is sent as an image. TIFF is not accepted.
+**Vision LLM** is the previous path: a PDF or image is sent to the selected model with the field list. If that deployment refuses a PDF attachment, the app reads the text from the file and sends the text instead. TIFF is not accepted on this path.
+
+**PaddleOCR then LLM** rasterizes each PDF page (or the uploaded image), runs PaddleOCR PP-OCRv4 locally through ONNX, then sends that text to the same selected model to fill the schema. Token counts on the usage panel are from the model, not from OCR. A scan or a TIFF can use this path. Cloud Foundry memory is 1024M so ONNX and page rendering fit.
 
 ## Compare Document AI and AI Core
 
