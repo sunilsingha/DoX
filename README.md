@@ -54,11 +54,13 @@ Open SAP AI Launchpad with a user that has `mloperations_editor` or `genai_manag
 
 `gpt-4o` can read a PNG or JPEG. A text-only model cannot read a photo or a scan. `modelVersion` `latest` follows the current model version. SAP Note 3437766 lists available models, versions, and deprecation dates.
 
-Deploy the model itself. An orchestration deployment is a different endpoint. This app calls the model deployment's chat completions API, not orchestration.
+Deploy the model itself. An orchestration deployment is a different endpoint. This app calls the model deployment directly, not orchestration. GPT uses `chat/completions`. Gemini uses `generateContent`. Claude uses `/invoke`.
 
 The executable lists every model that provider can run, including `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, and `gpt-4.1-mini`. A deployment still serves only the `modelName` saved on its configuration. To change models from the page, create one configuration and one RUNNING deployment per model. The Model menu lists only those running chat deployments. Embedding, realtime, and undeployed models are left out.
 
 Gemini chat models use the same menu and a separate deployment ID. Keep the GPT deployment in `AICORE_DEPLOYMENT_ID`. Put the Gemini deployment in `AICORE_GEMINI_DEPLOYMENT_ID`, and set `AICORE_GEMINI_MODEL` to the deployed model name, usually `gemini-2.5-flash`. The Model menu shows a running Gemini chat deployment beside the GPT deployment. Picking Gemini calls that deployment's `generateContent` endpoint. `gemini-embedding` is not listed, because it cannot read an invoice.
+
+Claude models use executable `aws-bedrock` and a model name such as `anthropic--claude-4.6-opus`. After the deployment is RUNNING, it appears in the Model menu. Picking Claude calls `/invoke` with the Anthropic Messages API. SAP AI Core does not allow `chat/completions` on Claude deployments.
 
 ## 4. Schemas
 
@@ -98,15 +100,17 @@ The Source control has three choices:
 
 Document AI uses `DOX_UAA_URL`, `DOX_UAA_CLIENTID`, `DOX_UAA_CLIENTSECRET`, and `DOX_URL` from `default-env.json`, alongside the `AICORE_*` values. `DOX_CLIENT` is the Document AI client inside the extraction options, usually `default`. `DOX_TEMPLATE` is the activated template name when the schema fields use manual setup.
 
-The server requests a client-credentials token, then sends:
+The server requests a client-credentials token, then sends the matching path for that deployment:
 
 ```text
 POST {AI_API_URL}/v2/inference/deployments/{deploymentId}/chat/completions?api-version=2023-05-15
+POST {AI_API_URL}/v2/inference/deployments/{deploymentId}/models/{modelName}:generateContent
+POST {AI_API_URL}/v2/inference/deployments/{deploymentId}/invoke
 Authorization: Bearer <token>
 AI-Resource-Group: default
 ```
 
-`AI_API_URL` is the service key value without a trailing `/v2`. The default API version is `2023-05-15`. Set `AICORE_API_VERSION` to `none` to omit the query parameter.
+GPT uses `chat/completions`. Gemini uses `generateContent`. Claude uses `/invoke`. `AI_API_URL` is the service key value without a trailing `/v2`. The default API version is `2023-05-15` and applies only to GPT. Set `AICORE_API_VERSION` to `none` to omit the query parameter.
 
 The model is asked to return JSON shaped as `header` and `lineItems`, keyed by the schema field names. Empty fields stay empty. The model is instructed not to invent GSTINs, totals, or line items.
 

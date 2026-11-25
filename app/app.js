@@ -220,7 +220,7 @@
       hint.innerHTML = 'Both services read this file. The comparison marks each field that does not agree. The Model menu chooses which running AI Core deployment to compare with Document AI.';
       extract.textContent = 'Extract with both';
     } else {
-      hint.innerHTML = 'GPT and Gemini each have their own deployment ID. Choose the model above. The two IDs are filled from <code>default-env.json</code>.';
+      hint.innerHTML = 'GPT, Gemini, and Claude each have their own deployment. Choose the model above. GPT and Gemini IDs are filled from <code>default-env.json</code>.';
       extract.textContent = 'Extract invoice';
     }
   }
@@ -343,7 +343,7 @@
       if (shown.length || document.getElementById('deployment-id').value.trim()) {
         note.textContent = 'The menu lists running chat models only.';
       } else if (body.error) note.textContent = body.error;
-      else note.textContent = 'No chat model is deployed yet. Add a GPT or Gemini deployment ID under Request options.';
+      else note.textContent = 'No chat model is deployed yet. Add a GPT, Gemini, or Claude deployment under Request options.';
     } catch (error) {
       fillModelSelect([], '');
       note.textContent = error.message;

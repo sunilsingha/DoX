@@ -183,6 +183,7 @@ function fieldLines(fields) {
 }
 
 const OUTPUT_TOKENS = 16384;
+const SYSTEM_PROMPT = 'You extract business documents into the requested JSON schema. Reply with JSON only.';
 const TEXT_CHUNK_CHARS = 12000;
 const PAGE_TEXT_CHARS = 40;
 const EXTRACT_CONCURRENCY = 3;
@@ -515,19 +516,19 @@ function readUsage(payload) {
   }
   const openai = payload.usage;
   if (!openai || typeof openai !== 'object') return null;
-  const prompt = finiteNumber(openai.prompt_tokens);
-  const completion = finiteNumber(openai.completion_tokens);
-  const total = finiteNumber(openai.total_tokens);
+  const prompt = finiteNumber(openai.prompt_tokens != null ? openai.prompt_tokens : openai.input_tokens != null ? openai.input_tokens : openai.inputTokens);
+  const completion = finiteNumber(openai.completion_tokens != null ? openai.completion_tokens : openai.output_tokens != null ? openai.output_tokens : openai.outputTokens);
+  const total = finiteNumber(openai.total_tokens != null ? openai.total_tokens : openai.totalTokens);
   const promptDetails = openai.prompt_tokens_details || {};
   const completionDetails = openai.completion_tokens_details || {};
   return {
-    model: payload.model || '',
+    model: payload.model || payload.modelName || '',
     inputTokens: prompt,
     outputTokens: completion,
     promptTokens: prompt,
     completionTokens: completion,
     totalTokens: total != null ? total : (prompt || 0) + (completion || 0),
-    cachedTokens: finiteNumber(promptDetails.cached_tokens),
+    cachedTokens: finiteNumber(promptDetails.cached_tokens != null ? promptDetails.cached_tokens : openai.cache_read_input_tokens),
     reasoningTokens: finiteNumber(completionDetails.reasoning_tokens),
     promptDetails: [],
     completionDetails: []
@@ -581,6 +582,13 @@ function combineUsage(parts, context) {
 function messageText(payload) {
   const geminiParts = payload && payload.candidates && payload.candidates[0] && payload.candidates[0].content && payload.candidates[0].content.parts;
   if (Array.isArray(geminiParts)) return geminiParts.map(part => (part && part.text) || '').join('\n');
+  const converseParts = payload && payload.output && payload.output.message && payload.output.message.content;
+  if (Array.isArray(converseParts)) {
+    return converseParts.map(part => (part && (part.text || (part.type === 'text' && part.text))) || '').join('\n');
+  }
+  if (Array.isArray(payload && payload.content)) {
+    return payload.content.map(part => (typeof part === 'string' ? part : (part && part.text) || '')).join('\n');
+  }
   const choice = payload && payload.choices && payload.choices[0];
   const content = choice && choice.message && choice.message.content;
   if (typeof content === 'string') return content;
@@ -700,7 +708,17 @@ function providerFor(model) {
   const executable = String((model && model.executableId) || '').toLowerCase();
   const name = String((model && model.modelName) || model || '').toLowerCase();
   if (executable === 'gcp-vertexai' || name.startsWith('gemini')) return 'gemini';
+  if (executable === 'aws-bedrock' || executable.includes('anthropic') || name.includes('claude') || name.includes('anthropic')) {
+    return 'anthropic';
+  }
   return 'openai';
+}
+
+function executableFor(model) {
+  const provider = providerFor(model);
+  if (provider === 'gemini') return 'gcp-vertexai';
+  if (provider === 'anthropic') return 'aws-bedrock';
+  return 'azure-openai';
 }
 
 function modelUse(name) {
@@ -751,7 +769,7 @@ function joinModelCatalog({ configurations, deployments }) {
       modelName,
       modelVersion,
       deploymentId: deployment.id,
-      executableId: configuration.executableId || deployment.executableId || (providerFor(modelName) === 'gemini' ? 'gcp-vertexai' : 'azure-openai'),
+      executableId: configuration.executableId || deployment.executableId || executableFor(modelName),
       configurationName: configuration.name || deployment.configurationName || '',
       deployed: true,
       usable: use.usable,
@@ -835,7 +853,7 @@ function includeConfiguredDeployments(models, deployments, config) {
     const fromDetails = modelFromDeployment(deployment);
     const modelName = fromDetails.modelName || fallbackName;
     if (modelName && !isChatModel(modelName)) return;
-    const executable = deployment.executableId || executableId || (String(modelName).toLowerCase().startsWith('gemini') ? 'gcp-vertexai' : 'azure-openai');
+    const executable = deployment.executableId || executableId || executableFor(modelName);
     const existing = list.find(item => item.deploymentId === id);
     if (existing) {
       if (!existing.modelName && modelName) existing.modelName = modelName;
@@ -887,7 +905,7 @@ function geminiPayload(content, options = {}) {
   if (options.thinking !== false) generationConfig.thinkingConfig = { thinkingBudget: 0 };
   return {
     systemInstruction: {
-      parts: [{ text: 'You extract business documents into the requested JSON schema. Reply with JSON only.' }]
+      parts: [{ text: SYSTEM_PROMPT }]
     },
     contents: [{ role: 'user', parts: geminiParts(content) }],
     generationConfig
@@ -899,7 +917,7 @@ function chatPayload(modelName, content) {
     messages: [
       {
         role: 'system',
-        content: 'You extract business documents into the requested JSON schema. Reply with JSON only.'
+        content: SYSTEM_PROMPT
       },
       { role: 'user', content }
     ]
@@ -912,12 +930,85 @@ function chatPayload(modelName, content) {
   return payload;
 }
 
+function dataUrlParts(source) {
+  const match = String(source || '').match(/^data:([^;]+);base64,(.+)$/);
+  return match ? { mediaType: match[1], data: match[2] } : null;
+}
+
+function anthropicBlocks(content) {
+  if (typeof content === 'string') return content;
+  return (Array.isArray(content) ? content : [content]).map(item => {
+    if (!item) return null;
+    if (typeof item === 'string') return { type: 'text', text: item };
+    if (item.type === 'text') return { type: 'text', text: item.text || '' };
+    if (item.type === 'image_url') {
+      const parts = dataUrlParts(item.image_url && item.image_url.url);
+      if (!parts) return null;
+      return { type: 'image', source: { type: 'base64', media_type: parts.mediaType, data: parts.data } };
+    }
+    if (item.type === 'file') {
+      const parts = dataUrlParts(item.file && item.file.file_data);
+      if (!parts) return null;
+      if (String(parts.mediaType).startsWith('image/')) {
+        return { type: 'image', source: { type: 'base64', media_type: parts.mediaType, data: parts.data } };
+      }
+      return {
+        type: 'document',
+        source: { type: 'base64', media_type: parts.mediaType || 'application/pdf', data: parts.data }
+      };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+function anthropicPayload(content) {
+  return {
+    anthropic_version: 'bedrock-2023-05-31',
+    max_tokens: OUTPUT_TOKENS,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: anthropicBlocks(content) }]
+  };
+}
+
+function converseBlocks(content) {
+  const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : anthropicBlocks(content);
+  const items = Array.isArray(blocks) ? blocks : [{ type: 'text', text: String(blocks || '') }];
+  return items.map(item => {
+    if (item.type === 'text') return { text: item.text || '' };
+    if (item.type === 'image' && item.source) {
+      const format = String(item.source.media_type || '').replace('image/', '') || 'png';
+      return { image: { format, source: { bytes: item.source.data } } };
+    }
+    if (item.type === 'document' && item.source) {
+      const format = String(item.source.media_type || '').includes('pdf') ? 'pdf' : 'txt';
+      return { document: { format, name: 'invoice', source: { bytes: item.source.data } } };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+function conversePayload(content) {
+  return {
+    inferenceConfig: { maxTokens: OUTPUT_TOKENS },
+    system: [{ text: SYSTEM_PROMPT }],
+    messages: [{ role: 'user', content: converseBlocks(content) }]
+  };
+}
+
 function inferenceUrl(config, deploymentId) {
   return `${config.apiUrl}/v2/inference/deployments/${encodeURIComponent(deploymentId)}/chat/completions`;
 }
 
 function geminiUrl(config, deploymentId, modelName) {
   return `${config.apiUrl}/v2/inference/deployments/${encodeURIComponent(deploymentId)}/models/${encodeURIComponent(modelName)}:generateContent`;
+}
+
+function anthropicUrl(config, deploymentId) {
+  return `${config.apiUrl}/v2/inference/deployments/${encodeURIComponent(deploymentId)}/invoke`;
+}
+
+function converseUrl(config, deploymentId) {
+  return `${config.apiUrl}/v2/inference/deployments/${encodeURIComponent(deploymentId)}/converse`;
 }
 
 async function aiCoreGet(config, token, group, pathname, params) {
@@ -1071,7 +1162,7 @@ async function listChatModels({ resourceGroup } = {}) {
 }
 
 function deploymentExecutable(requested) {
-  return providerFor(requested) === 'gemini' ? 'gcp-vertexai' : 'azure-openai';
+  return executableFor(requested);
 }
 
 function directDeployment(requested, explicit, executableId) {
@@ -1141,15 +1232,26 @@ async function postInference(config, token, group, url, body, params) {
   }
 }
 
+function subpathRejected(response) {
+  const detail = `${safeDetail(response && response.data)} ${response && response.status}`.toLowerCase();
+  return response && response.status === 400 && detail.includes('subpath');
+}
+
 async function completeChat(config, token, group, deployment, content, model) {
   const modelName = typeof model === 'string' ? model : (model && model.modelName) || '';
   const executableId = typeof model === 'object' && model ? model.executableId : '';
-  if (providerFor({ modelName, executableId }) === 'gemini') {
+  const provider = providerFor({ modelName, executableId });
+  if (provider === 'gemini') {
     if (modelRole(modelName) === 'embedding') throw new AiCoreError(modelUse(modelName).reason, 400);
     const url = geminiUrl(config, deployment, modelName);
     const response = await postInference(config, token, group, url, geminiPayload(content), {});
     if (response.status !== 400) return response;
     return postInference(config, token, group, url, geminiPayload(content, { json: false, thinking: false }), {});
+  }
+  if (provider === 'anthropic') {
+    const invoked = await postInference(config, token, group, anthropicUrl(config, deployment), anthropicPayload(content), {});
+    if (!subpathRejected(invoked)) return invoked;
+    return postInference(config, token, group, converseUrl(config, deployment), conversePayload(content), {});
   }
   const params = {};
   if (config.apiVersion && config.apiVersion.toLowerCase() !== 'none') params['api-version'] = config.apiVersion;
@@ -1168,7 +1270,9 @@ function responseTruncated(payload) {
   const reason = payload && payload.choices && payload.choices[0] && payload.choices[0].finish_reason;
   if (reason === 'length') return true;
   const gemini = payload && payload.candidates && payload.candidates[0] && payload.candidates[0].finishReason;
-  return gemini === 'MAX_TOKENS';
+  if (gemini === 'MAX_TOKENS') return true;
+  const anthropic = payload && (payload.stop_reason || payload.stopReason);
+  return anthropic === 'max_tokens';
 }
 
 function matchingBrace(source, start) {
@@ -1422,6 +1526,7 @@ module.exports = {
   isChatModel,
   reasoningModel,
   providerFor,
+  executableFor,
   modelUse,
   supportedModelNames,
   joinModelCatalog,
@@ -1432,6 +1537,11 @@ module.exports = {
   pickDeployment,
   chatPayload,
   geminiPayload,
+  anthropicPayload,
+  conversePayload,
+  anthropicUrl,
+  converseUrl,
+  inferenceUrl,
   messageText,
   linesFromItems,
   groupPages,

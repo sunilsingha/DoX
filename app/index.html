@@ -98,7 +98,7 @@
                 <input id="template" autocomplete="off" placeholder="Needed when fields use manual setup" />
               </label>
             </div>
-            <p class="hint" id="source-hint">GPT and Gemini each have their own deployment ID. Choose the model above. Resource group is usually <code>default</code>.</p>
+            <p class="hint" id="source-hint">GPT, Gemini, and Claude each have their own deployment. Choose the model above. Resource group is usually <code>default</code>.</p>
             <div class="actions">
               <button type="button" class="btn" id="load-schema">Load schema export</button>
               <input id="schema-file" type="file" accept="application/json,.json" hidden />
@@ -250,7 +250,7 @@
         </li>
         <li>
           <strong>Deploy a vision-capable chat model.</strong>
-          In SAP AI Launchpad, select this AI Core runtime and the <code>default</code> resource group. Open ML Operations, then Scenarios, and confirm <code>foundation-models</code> is listed. If it is missing, the instance is not on the extended plan. Create a configuration: scenario <code>foundation-models</code>, the executable for the provider (for GPT models this is <code>azure-openai</code>), parameter <code>modelName</code> <code>gpt-4o</code>, and <code>modelVersion</code> <code>latest</code>. Create a deployment with duration Standard. Wait until the status is RUNNING. Copy the deployment ID into <code>AICORE_DEPLOYMENT_ID</code>. Deploy the model itself. An orchestration-only deployment is a different endpoint and is not what this page calls. One deployment serves only the <code>modelName</code> on its configuration. To switch models from this page, create another configuration for each model, such as <code>gpt-4o-mini</code> or <code>gpt-4.1</code>, and deploy that too. The Model menu lists only RUNNING chat deployments and calls the one you pick. GPT models use executable <code>azure-openai</code>. Gemini chat models use executable <code>gcp-vertexai</code> with a model such as <code>gemini-2.5-flash</code>. Undeployed models, embedding models, and realtime models are not listed.
+          In SAP AI Launchpad, select this AI Core runtime and the <code>default</code> resource group. Open ML Operations, then Scenarios, and confirm <code>foundation-models</code> is listed. If it is missing, the instance is not on the extended plan. Create a configuration: scenario <code>foundation-models</code>, the executable for the provider (for GPT models this is <code>azure-openai</code>), parameter <code>modelName</code> <code>gpt-4o</code>, and <code>modelVersion</code> <code>latest</code>. Create a deployment with duration Standard. Wait until the status is RUNNING. Copy the deployment ID into <code>AICORE_DEPLOYMENT_ID</code>. Deploy the model itself. An orchestration-only deployment is a different endpoint and is not what this page calls. One deployment serves only the <code>modelName</code> on its configuration. To switch models from this page, create another configuration for each model, such as <code>gpt-4o-mini</code> or <code>gpt-4.1</code>, and deploy that too. The Model menu lists only RUNNING chat deployments and calls the one you pick. GPT models use executable <code>azure-openai</code> and <code>chat/completions</code>. Gemini chat models use executable <code>gcp-vertexai</code> with a model such as <code>gemini-2.5-flash</code> and <code>generateContent</code>. Claude models use executable <code>aws-bedrock</code>, a model such as <code>anthropic--claude-4.6-opus</code>, and <code>/invoke</code>. Undeployed models, embedding models, and realtime models are not listed.
         </li>
         <li>
           <strong>Keep one schema file per document type.</strong>
@@ -267,6 +267,7 @@
       </ol>
       <p>The call looks like this:</p>
       <pre>POST {AI_API_URL}/v2/inference/deployments/{deploymentId}/chat/completions?api-version=2023-05-15
+POST {AI_API_URL}/v2/inference/deployments/{deploymentId}/invoke
 AI-Resource-Group: default
 Authorization: Bearer &lt;token&gt;</pre>
       <p>Preview sample fills the tables with a fictional GST invoice so you can learn the layout before the service key works. It does not call SAP AI Core.</p>

@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 const zlib = require('zlib');
-const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, geminiPayload, messageText, readUsage, combineUsage, linesFromItems, groupPages, planPdfJobs, textCoversDocument, mergeExtractions, salvageModelContent } = require('../srv/ai-core');
+const { parseModelContent, mapExtraction, extractionPrompt, publicStatus, prepareDocument, userContent, readPdfText, isChatModel, supportedModelNames, joinModelCatalog, mergeConfiguredModels, chooseCatalog, includeConfiguredDeployments, resolveChatDeployment, pickDeployment, chatPayload, reasoningModel, providerFor, executableFor, geminiPayload, anthropicPayload, conversePayload, anthropicUrl, converseUrl, inferenceUrl, messageText, readUsage, combineUsage, linesFromItems, groupPages, planPdfJobs, textCoversDocument, mergeExtractions, salvageModelContent } = require('../srv/ai-core');
 const { loadSchemaSync, listLocalSchemas } = require('../srv/document-ai');
 
 const schema = {
@@ -38,6 +38,7 @@ assert.strictEqual(isChatModel('text-embedding-3-large'), false);
 assert.strictEqual(isChatModel('gpt-4o-realtime'), false);
 assert.strictEqual(isChatModel('sap-rpt-1-small'), false);
 assert.strictEqual(isChatModel('gemini-2.5-flash-image'), false);
+assert.strictEqual(isChatModel('anthropic--claude-4.6-opus'), true);
 assert.strictEqual(reasoningModel('o4-mini'), true);
 assert.strictEqual(reasoningModel('gpt-5.4'), true);
 assert.strictEqual(reasoningModel('gpt-4o'), false);
@@ -154,6 +155,52 @@ const geminiCatalog = joinModelCatalog({
 assert.ok(!geminiCatalog.some(item => item.modelName === 'gemini-embedding'));
 assert.ok(!geminiCatalog.some(item => item.modelName === 'gemini-2.5-flash'));
 assert.strictEqual(providerFor({ modelName: 'gemini-2.5-flash', executableId: 'gcp-vertexai' }), 'gemini');
+assert.strictEqual(providerFor({ modelName: 'anthropic--claude-4.6-opus', executableId: 'aws-bedrock' }), 'anthropic');
+assert.strictEqual(providerFor('anthropic--claude-4.6-opus'), 'anthropic');
+assert.strictEqual(executableFor('anthropic--claude-4.6-opus'), 'aws-bedrock');
+assert.strictEqual(executableFor({ modelName: 'gpt-4o-mini' }), 'azure-openai');
+assert.strictEqual(inferenceUrl({ apiUrl: 'https://api.example' }, 'dep-gpt').endsWith('/chat/completions'), true);
+assert.strictEqual(anthropicUrl({ apiUrl: 'https://api.example' }, 'dep-claude').endsWith('/invoke'), true);
+assert.strictEqual(converseUrl({ apiUrl: 'https://api.example' }, 'dep-claude').endsWith('/converse'), true);
+const claudeCatalog = joinModelCatalog({
+  configurations: [{
+    id: 'cfg-claude',
+    scenarioId: 'foundation-models',
+    executableId: 'aws-bedrock',
+    parameterBindings: [{ key: 'modelName', value: 'anthropic--claude-4.6-opus' }, { key: 'modelVersion', value: 'latest' }]
+  }],
+  deployments: [{
+    id: 'dep-claude',
+    configurationId: 'cfg-claude',
+    status: 'RUNNING',
+    scenarioId: 'foundation-models',
+    executableId: 'aws-bedrock'
+  }]
+});
+assert.ok(claudeCatalog.some(item => item.modelName === 'anthropic--claude-4.6-opus' && item.deploymentId === 'dep-claude' && item.executableId === 'aws-bedrock'));
+const anthropicBody = anthropicPayload([
+  { type: 'text', text: 'Extract' },
+  { type: 'image_url', image_url: { url: 'data:image/png;base64,aaa' } },
+  { type: 'file', file: { filename: 'invoice.pdf', file_data: 'data:application/pdf;base64,JVBERg==' } }
+]);
+assert.strictEqual(anthropicBody.anthropic_version, 'bedrock-2023-05-31');
+assert.strictEqual(anthropicBody.messages[0].content[1].type, 'image');
+assert.strictEqual(anthropicBody.messages[0].content[1].source.media_type, 'image/png');
+assert.strictEqual(anthropicBody.messages[0].content[2].type, 'document');
+assert.ok(!Object.prototype.hasOwnProperty.call(anthropicBody, 'model'));
+const converseBody = conversePayload('Extract');
+assert.strictEqual(converseBody.messages[0].content[0].text, 'Extract');
+const claudeText = messageText({ content: [{ type: 'text', text: '{"header":{}}' }], stop_reason: 'end_turn' });
+assert.ok(claudeText.includes('header'));
+const converseText = messageText({ output: { message: { content: [{ text: '{"lineItems":[]}' }] } } });
+assert.ok(converseText.includes('lineItems'));
+const claudeUsage = readUsage({
+  usage: { input_tokens: 1800, output_tokens: 420 }
+});
+assert.strictEqual(claudeUsage.inputTokens, 1800);
+assert.strictEqual(claudeUsage.outputTokens, 420);
+assert.strictEqual(claudeUsage.promptTokens, 1800);
+assert.strictEqual(claudeUsage.totalTokens, 2220);
 const geminiBody = geminiPayload([
   { type: 'text', text: 'Extract' },
   { type: 'file', file: { file_data: 'data:application/pdf;base64,JVBERg==' } }
