@@ -19,6 +19,7 @@
   let previewLoadingTask = null;
   let previewPdf = null;
   let previewZoom = 1;
+  let previewDrag = null;
   let usageOpen = false;
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 3;
@@ -47,6 +48,12 @@
   document.getElementById('preview-zoom-in').addEventListener('click', () => setPreviewZoom(previewZoom + ZOOM_STEP));
   document.getElementById('preview-zoom-out').addEventListener('click', () => setPreviewZoom(previewZoom - ZOOM_STEP));
   document.getElementById('preview-zoom-fit').addEventListener('click', () => setPreviewZoom(1));
+  const previewFrame = document.getElementById('preview-frame');
+  previewFrame.addEventListener('pointerdown', startPreviewDrag);
+  previewFrame.addEventListener('pointermove', movePreviewDrag);
+  previewFrame.addEventListener('pointerup', endPreviewDrag);
+  previewFrame.addEventListener('pointercancel', endPreviewDrag);
+  previewFrame.addEventListener('lostpointercapture', endPreviewDrag);
   document.getElementById('usage-toggle').addEventListener('click', () => {
     usageOpen = !usageOpen;
     syncUsageToggle();
@@ -434,6 +441,52 @@
     pages.style.setProperty('--preview-zoom', String(previewZoom));
     pages.style.setProperty('--preview-base-width', base);
     image.style.setProperty('--preview-zoom', String(previewZoom));
+    syncPreviewCursor();
+  }
+
+  function previewHasDocument() {
+    const pages = document.getElementById('preview-pages');
+    const image = document.getElementById('preview-image');
+    return (!pages.hidden && pages.querySelector('canvas')) || (!image.hidden && image.getAttribute('src'));
+  }
+
+  function previewOverflows() {
+    return previewFrame.scrollWidth > previewFrame.clientWidth + 1
+      || previewFrame.scrollHeight > previewFrame.clientHeight + 1;
+  }
+
+  function syncPreviewCursor() {
+    previewFrame.classList.toggle('is-pannable', previewHasDocument() && previewOverflows());
+  }
+
+  function startPreviewDrag(event) {
+    if (event.button !== 0 || previewDrag) return;
+    if (!previewHasDocument() || !previewOverflows()) return;
+    event.preventDefault();
+    previewFrame.setPointerCapture(event.pointerId);
+    previewDrag = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      left: previewFrame.scrollLeft,
+      top: previewFrame.scrollTop
+    };
+    previewFrame.classList.add('is-panning');
+  }
+
+  function movePreviewDrag(event) {
+    if (!previewDrag || event.pointerId !== previewDrag.pointerId) return;
+    event.preventDefault();
+    previewFrame.scrollLeft = previewDrag.left - (event.clientX - previewDrag.x);
+    previewFrame.scrollTop = previewDrag.top - (event.clientY - previewDrag.y);
+  }
+
+  function endPreviewDrag(event) {
+    if (!previewDrag) return;
+    if (event && event.pointerId != null && event.pointerId !== previewDrag.pointerId) return;
+    previewDrag = null;
+    previewFrame.classList.remove('is-panning');
+    syncPreviewCursor();
   }
 
   function setPreviewZoom(next) {
@@ -445,6 +498,10 @@
     const tools = document.getElementById('preview-tools');
     tools.hidden = !visible;
     if (visible) applyPreviewZoom();
+    else {
+      endPreviewDrag();
+      previewFrame.classList.remove('is-pannable', 'is-panning');
+    }
   }
 
   function setPreview(file) {
@@ -493,6 +550,7 @@
       unsupported.hidden = false;
       unsupported.textContent = 'This image could not be previewed. Upload a PNG or JPEG.';
     };
+    image.onload = () => syncPreviewCursor();
     image.src = previewUrl;
     image.hidden = false;
     applyPreviewZoom();
@@ -567,6 +625,7 @@
       context.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: context, viewport }).promise;
     }
+    if (generation === previewGeneration) syncPreviewCursor();
   }
 
   async function extract(mode) {

@@ -410,6 +410,22 @@ input:focus, select:focus, button:focus-visible, .dropzone:focus-visible {
   scrollbar-gutter: stable;
 }
 
+.preview-frame.is-pannable { cursor: grab; }
+.preview-frame.is-panning {
+  cursor: grabbing;
+  user-select: none;
+  touch-action: none;
+}
+
+.preview-frame.is-panning img,
+.preview-frame.is-panning canvas { pointer-events: none; }
+
+.preview-frame img,
+.preview-pages canvas {
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 .preview-frame img,
 .preview-pages {
   display: block;
