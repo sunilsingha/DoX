@@ -1,6 +1,9 @@
 'use strict';
 
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const Module = require('module');
 const sharp = require('sharp');
 
@@ -22,6 +25,10 @@ let enginePromise = null;
 
 shimCanvasPackage();
 ensureCanvasDom();
+
+function isColourspaceError(error) {
+  return /colourspace|colorspace|parameter space/i.test(error && error.message ? error.message : String(error || ''));
+}
 
 function inputModeFrom(value) {
   const mode = String(value || 'vision').trim().toLowerCase();
@@ -86,8 +93,42 @@ function setCreateEngine(fn) {
   enginePromise = null;
 }
 
+async function patchOcrImageRaw() {
+  if (patchOcrImageRaw.done) return;
+  patchOcrImageRaw.done = true;
+  try {
+    const file = path.join(path.dirname(require.resolve('@gutenye/ocr-node')), 'ImageRaw.js');
+    const loaded = await import(pathToFileURL(file).href);
+    const ImageRaw = loaded.ImageRaw;
+    if (!ImageRaw || !ImageRaw.prototype || !ImageRaw.prototype.resize) return;
+    const originalResize = ImageRaw.prototype.resize;
+    ImageRaw.prototype.resize = async function resize(size) {
+      try {
+        return await originalResize.call(this, size);
+      } catch (error) {
+        if (!isColourspaceError(error)) throw error;
+        const { data, info } = await sharp(this.data, {
+          raw: { width: this.width, height: this.height, channels: 4 }
+        }).toColourspace('srgb').resize({
+          width: size.width,
+          height: size.height,
+          fit: 'contain',
+          background: { r: 255, g: 255, b: 255, alpha: 1 }
+        }).ensureAlpha().toColourspace('srgb').raw().toBuffer({ resolveWithObject: true });
+        this.data = data;
+        this.width = info.width;
+        this.height = info.height;
+        return this;
+      }
+    };
+  } catch (error) {
+    // OCR can still run if this resize patch cannot load.
+  }
+}
+
 async function defaultCreateEngine() {
   const loaded = await import('@gutenye/ocr-node');
+  await patchOcrImageRaw();
   const Ocr = loaded.default || loaded;
   return Ocr.create();
 }
@@ -134,15 +175,27 @@ function shimCanvasPackage() {
   };
 }
 
-async function toRawRgba(buffer) {
-  const { data, info } = await sharp(buffer).rotate().ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  return { data, width: info.width, height: info.height };
+async function toSrgbPng(buffer) {
+  return sharp(buffer, { failOn: 'none' })
+    .rotate()
+    .flatten({ background: { r: 255, g: 255, b: 255 } })
+    .ensureAlpha()
+    .toColourspace('srgb')
+    .png()
+    .toBuffer();
 }
 
 async function ocrImageBuffer(buffer) {
   const engine = await getEngine();
-  const image = await toRawRgba(buffer);
-  return linesFromOcr(await engine.detect(image));
+  const png = await toSrgbPng(buffer);
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'dox-ocr-'));
+  const file = path.join(dir, 'page.png');
+  await fs.promises.writeFile(file, png);
+  try {
+    return linesFromOcr(await engine.detect(file));
+  } finally {
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 class NodeCanvasFactory {
@@ -191,6 +244,7 @@ async function loadPdf(buffer) {
     disableWorker: true,
     isEvalSupported: false,
     disableFontFace: true,
+    stopAtErrors: false,
     canvasFactory,
     standardFontDataUrl: `${path.join(root, 'standard_fonts')}${path.sep}`,
     cMapUrl: `${path.join(root, 'cmaps')}${path.sep}`,
@@ -215,10 +269,126 @@ async function renderPdfPage(document, pageNumber) {
       canvasFactory,
       background: '#ffffff'
     }).promise;
-    return canvasAndContext.canvas.toBuffer('image/png');
+    return canvasToPng(canvasAndContext);
   } finally {
     canvasFactory.destroy(canvasAndContext);
   }
+}
+
+async function canvasToPng(canvasAndContext) {
+  const canvas = canvasAndContext.canvas;
+  const context = canvasAndContext.context;
+  try {
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    return sharp(Buffer.from(imageData.data), {
+      raw: { width: canvas.width, height: canvas.height, channels: 4 }
+    }).toColourspace('srgb').png().toBuffer();
+  } catch (error) {
+    if (typeof canvas.toBuffer === 'function') {
+      return toSrgbPng(canvas.toBuffer('image/png'));
+    }
+    throw error;
+  }
+}
+
+function waitForPdfObject(container, name) {
+  if (!container || typeof container.get !== 'function') return Promise.resolve(null);
+  return new Promise(resolve => {
+    try {
+      container.get(name, data => resolve(data || null));
+    } catch (error) {
+      resolve(null);
+    }
+  });
+}
+
+async function embeddedPageImages(document, pageNumber) {
+  const pdfjs = loadPdfjs();
+  const page = await document.getPage(pageNumber);
+  const ops = await page.getOperatorList();
+  const names = [];
+  for (let index = 0; index < ops.fnArray.length; index += 1) {
+    const fn = ops.fnArray[index];
+    if (fn !== pdfjs.OPS.paintImageXObject && fn !== pdfjs.OPS.paintInlineImageXObject && fn !== pdfjs.OPS.paintImageXObjectRepeat) continue;
+    const name = ops.argsArray[index] && ops.argsArray[index][0];
+    if (typeof name === 'string' && !names.includes(name)) names.push(name);
+  }
+  const images = [];
+  for (const name of names) {
+    const img = (await waitForPdfObject(page.objs, name)) || (await waitForPdfObject(page.commonObjs, name));
+    if (!img || !img.width || !img.height || !img.data) continue;
+    images.push(img);
+  }
+  return images.sort((left, right) => (right.width * right.height) - (left.width * left.height));
+}
+
+async function pngFromPdfImage(img) {
+  const width = img.width;
+  const height = img.height;
+  const source = Buffer.from(img.data);
+  if (img.kind === 1) {
+    const rgba = Buffer.alloc(width * height * 4, 255);
+    const packedWidth = Math.ceil(width / 8);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const byte = source[y * packedWidth + (x >> 3)] || 0;
+        const bit = (byte >> (7 - (x & 7))) & 1;
+        const index = (y * width + x) * 4;
+        const value = bit ? 0 : 255;
+        rgba[index] = value;
+        rgba[index + 1] = value;
+        rgba[index + 2] = value;
+      }
+    }
+    return sharp(rgba, { raw: { width, height, channels: 4 } }).toColourspace('srgb').png().toBuffer();
+  }
+  const channels = img.kind === 2 ? 3 : 4;
+  const expected = width * height * channels;
+  if (source.length < expected) throw new Error('The embedded page image is incomplete.');
+  return sharp(source.subarray(0, expected), { raw: { width, height, channels } })
+    .toColourspace('srgb')
+    .png()
+    .toBuffer();
+}
+
+async function pdfPagePngs(buffer, pageNumber = 1) {
+  const document = await loadPdf(buffer);
+  return pagePngsFromPdf(document, pageNumber);
+}
+
+async function pagePngsFromPdf(document, pageNumber) {
+  const images = await embeddedPageImages(document, pageNumber);
+  const pngs = [];
+  for (const img of images) {
+    const area = img.width * img.height;
+    if (img.kind !== 2 && img.kind !== 3) continue;
+    if (area < 80 * 80) continue;
+    pngs.push(await pngFromPdfImage(img));
+  }
+  if (pngs.length) return pngs;
+  for (const img of images.slice(0, 2)) {
+    try {
+      pngs.push(await pngFromPdfImage(img));
+    } catch (error) {
+      // Try the next embedded image.
+    }
+  }
+  return pngs;
+}
+
+async function ocrEmbeddedImages(document, pageNumber) {
+  const pngs = await pagePngsFromPdf(document, pageNumber);
+  let lastError = '';
+  for (const png of pngs.slice(0, 2)) {
+    try {
+      const text = await ocrImageBuffer(png);
+      if (hasPrintedText(text)) return text;
+    } catch (error) {
+      lastError = error && error.message ? error.message : String(error);
+    }
+  }
+  if (lastError) throw new Error(lastError);
+  return '';
 }
 
 async function pagePrintedText(document, pageNumber) {
@@ -241,25 +411,12 @@ async function ocrPdf(buffer) {
   const pageTexts = [];
   let lastError = '';
   for (let number = 1; number <= pageCount; number += 1) {
-    let text = '';
-    try {
-      const png = await renderPdfPage(document, number);
-      text = await ocrImageBuffer(png);
-    } catch (error) {
-      lastError = error && error.message ? error.message : String(error);
-    }
-    if (!hasPrintedText(text)) {
-      try {
-        text = await pagePrintedText(document, number);
-      } catch (error) {
-        lastError = lastError || (error && error.message ? error.message : String(error));
-      }
-    }
-    pageTexts.push({ number, text });
+    const page = await readPdfPage(document, number);
+    lastError = page.error || lastError;
+    pageTexts.push({ number, text: page.text });
   }
   if (!pageTexts.some(page => hasPrintedText(page.text))) {
-    const detail = lastError ? ` ${lastError}` : '';
-    throw new OcrError(`PaddleOCR did not read any text from this PDF.${detail} Try Vision LLM.`.trim(), 400);
+    throw new OcrError(publicOcrError(lastError), 400);
   }
   return {
     engine: OCR_ENGINE,
@@ -269,6 +426,36 @@ async function ocrPdf(buffer) {
     pageTexts,
     text: joinPageTexts(pageTexts)
   };
+}
+
+async function readPdfPage(document, number) {
+  const attempts = [
+    async () => {
+      const png = await renderPdfPage(document, number);
+      return ocrImageBuffer(png);
+    },
+    async () => ocrEmbeddedImages(document, number),
+    async () => pagePrintedText(document, number)
+  ];
+  let lastError = '';
+  for (const attempt of attempts) {
+    try {
+      const text = await attempt();
+      if (hasPrintedText(text)) return { text, error: '' };
+    } catch (error) {
+      lastError = error && error.message ? error.message : String(error);
+    }
+  }
+  return { text: '', error: lastError };
+}
+
+function publicOcrError(detail) {
+  if (isColourspaceError({ message: detail })) {
+    return 'PaddleOCR could not convert this scanned page. Try Vision LLM.';
+  }
+  const text = String(detail || '').replace(/\s+/g, ' ').trim();
+  if (!text) return 'PaddleOCR did not read any text from this PDF. Try Vision LLM.';
+  return `PaddleOCR did not read any text from this PDF. ${text} Try Vision LLM.`;
 }
 
 async function ocrDocument({ buffer, filename }) {
@@ -294,5 +481,7 @@ module.exports = {
   printedLines,
   ocrDocument,
   setCreateEngine,
-  ensureCanvasDom
+  ensureCanvasDom,
+  pdfPagePngs,
+  publicOcrError
 };

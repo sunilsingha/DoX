@@ -1,7 +1,9 @@
 'use strict';
 
 const assert = require('assert');
-const { inputModeFrom, linesFromOcr, joinPageTexts, ocrDocument, setCreateEngine } = require('../srv/ocr');
+const { PDFDocument } = require('pdf-lib');
+const sharp = require('sharp');
+const { inputModeFrom, linesFromOcr, joinPageTexts, ocrDocument, setCreateEngine, pdfPagePngs, publicOcrError } = require('../srv/ocr');
 
 assert.strictEqual(inputModeFrom('ocr'), 'ocr');
 assert.strictEqual(inputModeFrom('PaddleOCR'), 'ocr');
@@ -103,6 +105,24 @@ setCreateEngine(async () => ({
   assert.ok(fallback.text.includes('Invoice'), fallback.text);
 
   await assert.rejects(() => ocrDocument({ buffer: Buffer.from('not-a-file'), filename: 'notes.txt' }), /PaddleOCR/);
+
+  assert.ok(/scanned page/.test(publicOcrError('colourspace: parameter space not set')));
+  assert.ok(/Try Vision LLM/.test(publicOcrError('')));
+
+  const pagePng = await sharp({
+    create: { width: 120, height: 90, channels: 3, background: { r: 255, g: 255, b: 255 } }
+  }).png().toBuffer();
+  const imagePdf = await PDFDocument.create();
+  const page = imagePdf.addPage([200, 200]);
+  const embedded = await imagePdf.embedPng(pagePng);
+  page.drawImage(embedded, { x: 10, y: 20, width: 120, height: 90 });
+  const scanned = Buffer.from(await imagePdf.save());
+  const extracted = await pdfPagePngs(scanned);
+  assert.ok(extracted.length >= 1, 'expected an embedded page image');
+  const meta = await sharp(extracted[0]).metadata();
+  assert.ok(meta.width >= 80, meta.width);
+  assert.ok(meta.height >= 80, meta.height);
+
   setCreateEngine(null);
   console.log('ocr tests passed');
 })().catch(error => {
