@@ -239,11 +239,11 @@
     const source = selectedSource();
     document.querySelectorAll('.for-aicore').forEach(node => { node.hidden = source === 'document'; });
     document.querySelectorAll('.for-document').forEach(node => { node.hidden = source === 'aicore'; });
-    document.querySelectorAll('.for-read-compare').forEach(node => { node.hidden = source !== 'aicore'; });
     if (source !== 'aicore' && selectedInputMode() === 'both') {
       const vision = document.querySelector('input[name="input-mode"][value="vision"]');
       if (vision) vision.checked = true;
     }
+    document.querySelectorAll('.for-read-compare').forEach(node => { node.hidden = source !== 'aicore'; });
     const hint = document.getElementById('source-hint');
     const extract = document.getElementById('extract');
     if (source === 'document') {
